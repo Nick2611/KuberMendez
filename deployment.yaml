@@ -1,0 +1,20 @@
+apiVersion: 123
+kind: Deployment
+metadata:
+  name: Nico
+spec:
+  selector:
+    matchLabels:
+      app: nico-nginx
+      nico: yo
+  template:
+    metadata:
+      name: nico-nginx
+      labels:
+        app: nico-nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
