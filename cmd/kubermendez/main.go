@@ -14,12 +14,28 @@ type ApplyCMD struct {
 }
 
 type ValidateCMD struct {
-	File string `arg:"-f, required" help:"Validate a given deployment document, will not take any effect on the deployment itself"`
+	File string `arg:"-f, required" help:"Validate a given deployment document, will not take any effect on the deployment itself"` //cambiar a deployment en vez de file
+}
+
+type GetCMD struct {
+	Pods  *PodsCMD `arg:"subcommand: pods"`
+}
+
+type PodsCMD struct {
+	DeploymentName string `arg:"-d" help:"List a specific deployment containers"`
+	All bool			  `arg:"-A" help:"List all pods"`
+}
+
+type RemoveCMD struct {
+	Deployment string `arg:"-f, required" help:"Deletes a given deployment containers"`
+  
 }
 
 type args struct{
 	Apply *ApplyCMD			`arg:"subcommand:apply, positional" help:"Used to create deployments"`
 	Validate *ValidateCMD	`arg:"subcommand:validate" help:"Used to validate deployments before applying them"`
+	Get *GetCMD				`arg:"subcommand:get"`
+	Remove *RemoveCMD		`arg:"subcommand:remove"`
 }
 
 func (args) Version() string{
@@ -53,11 +69,12 @@ func main(){
 		parsed_yaml, err := parser.Parser(file)
 
 		check(err)
-
+		
+		var deploymentName string = parsed_yaml.Metadata.Name
 		var containers []parser.Container = parsed_yaml.Spec.Template.Spec.Containers
 
 		for _, container := range containers{
-			docker.Docker(container)
+			docker.DockerRun(container, deploymentName)
 		}
 		
 
@@ -75,5 +92,14 @@ func main(){
 			}
 
 		}
+	case args.Get != nil:
+		if args.Get.Pods.DeploymentName != ""{
+			docker.ListContainers(args.Get.Pods.DeploymentName)
+		} else if args.Get.Pods.All{
+			docker.ListContainers("all")
+		}
+	case args.Remove != nil:
+		docker.RemoveContainers(args.Remove.Deployment)
 	}
+
 }

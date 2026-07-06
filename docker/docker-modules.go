@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	parser "kuberMendez/deployment-parser"
+	"log"
 	"net/netip"
 	"os"
 	"strconv"
@@ -15,7 +16,7 @@ import (
 	"github.com/moby/moby/client"
 )
 
-func Docker(spec parser.Container) {
+func DockerRun(spec parser.Container, deploymentName string) {
 
 	ctx := context.Background()
 	apiClient, err := client.New(client.FromEnv)
@@ -25,6 +26,14 @@ func Docker(spec parser.Container) {
 	defer apiClient.Close()
 
 	var image string = spec.Image
+	var envList []string
+
+	if len(spec.Env) != 0{
+		for _, env := range spec.Env{
+			envList = append(envList, fmt.Sprintf("%v=%v", env.Name, env.Value))
+		}
+	}
+
 	exposedPorts := make(network.PortSet)
 	hostPorts := make(network.PortMap)
 
@@ -48,8 +57,6 @@ func Docker(spec parser.Container) {
 
 		}
 
-
-
 	}
 
 	reader, err := apiClient.ImagePull(ctx, fmt.Sprintf("docker.io/library/%v", image), client.ImagePullOptions{})
@@ -62,8 +69,12 @@ func Docker(spec parser.Container) {
 		Image: image,
 		Name: spec.Name,
 		Config: &container.Config{
-			Labels: map[string]string{"creator":"Kubermendez"},
+			Labels: map[string]string{
+				"creator": "Kubermendez",
+				"DeploymentName": deploymentName,
+			},
 			ExposedPorts: exposedPorts,
+			Env: envList,
 		},
 		HostConfig: &container.HostConfig{
 			PortBindings: hostPorts,
@@ -86,4 +97,79 @@ func Docker(spec parser.Container) {
 	}
 
 	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
+}
+
+func ListContainers(deploymentName string){
+
+	ctx := context.Background()
+
+	apiClient, err := client.New(client.FromEnv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer apiClient.Close()
+
+	filters := make(client.Filters)
+
+	if deploymentName != "all"{
+		filters.Add("label",fmt.Sprintf("DeploymentName=%v",deploymentName))
+
+	} else{
+		filters.Add("label","creator=Kubermendez")
+	}
+
+	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+
+	if len(containers.Items) == 0 && deploymentName != "all"{
+		fmt.Println("There are no containers associated with that deployment name")
+	} else if len(containers.Items) == 0 && deploymentName == "all"{
+		fmt.Println("There are no containers up")
+	}
+
+	for _, container := range containers.Items {
+		fmt.Println(container.Names) 
+	}
+
+}
+
+func RemoveContainers(deploymentName string){
+	ctx := context.Background()
+
+	apiClient, err := client.New(client.FromEnv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer apiClient.Close()
+
+	filters := make(client.Filters)
+	filters.Add("label",fmt.Sprintf("DeploymentName=%v",deploymentName))
+
+	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(containers.Items) == 0{
+		fmt.Println("No containers to delete")
+
+	} else {
+
+		for _, container := range containers.Items {
+			_, err := apiClient.ContainerStop(ctx, container.ID, client.ContainerStopOptions{})
+			if err != nil{
+				log.Fatal(err) //TODO Convertir en funcion
+			}
+			_, err = apiClient.ContainerRemove(ctx, container.ID, client.ContainerRemoveOptions{})
+			if err != nil{
+				log.Fatal(err)
+			}
+			fmt.Println("Container", container.Names, "removed")
+		}
+	}
+
+
 }
