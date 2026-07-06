@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"github.com/alexflint/go-arg"
 	"kuberMendez/deployment-parser"
+	"kuberMendez/docker"
 )
 
 type ApplyCMD struct {
@@ -52,6 +53,13 @@ func main(){
 		parsed_yaml, err := parser.Parser(file)
 
 		check(err)
+
+		var containers []parser.Container = parsed_yaml.Spec.Template.Spec.Containers
+
+		for _, container := range containers{
+			docker.Docker(container)
+		}
+		
 
 		fmt.Println(parsed_yaml)
 

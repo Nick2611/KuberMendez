@@ -54,6 +54,7 @@ type Container struct {
 
 type Port struct {
 	ContainerPort int `yaml:"containerPort"`
+	HostPort *int	  `yaml:"hostPort"`
 }
 
 type EnvVar struct {
