@@ -15,12 +15,7 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx
+          image: putita22
           ports:
             - containerPort: 80
               hostPort: 8080
-        - name: pichon
-          image: alpine
-          ports:
-            - containerPort: 20
-              hostPort: 8050

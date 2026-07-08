@@ -14,15 +14,26 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+
+	"github.com/docker/docker/errdefs"
 )
+func catchDockerNotRunningError(){
+	log.Fatal("Docker Daemon not running.") //TODO Usar otra cosa que no sea log.Fatal
+}
+
+func initDockerClient() client.APIClient{
+	apiClient, err := client.New(client.FromEnv) //TODO Implementar mas funciones 
+	if err != nil {
+	}
+
+	return apiClient
+}
 
 func DockerRun(spec parser.Container, deploymentName string) {
 
 	ctx := context.Background()
-	apiClient, err := client.New(client.FromEnv)
-	if err != nil {
-		panic(err)
-	}
+	apiClient := initDockerClient()
+
 	defer apiClient.Close()
 
 	var image string = spec.Image
@@ -61,7 +72,12 @@ func DockerRun(spec parser.Container, deploymentName string) {
 
 	reader, err := apiClient.ImagePull(ctx, fmt.Sprintf("docker.io/library/%v", image), client.ImagePullOptions{})
 	if err != nil {
-		panic(err)
+		if client.IsErrConnectionFailed(err){
+			catchDockerNotRunningError()
+
+		} else if errdefs.NotFound(err) != nil {
+			log.Fatal("Image not found", image)
+		}
 	}
 	io.Copy(os.Stdout, reader)
 
@@ -103,10 +119,8 @@ func ListContainers(deploymentName string){
 
 	ctx := context.Background()
 
-	apiClient, err := client.New(client.FromEnv)
-	if err != nil {
-		log.Fatal(err)
-	}
+	apiClient := initDockerClient()
+
 	defer apiClient.Close()
 
 	filters := make(client.Filters)
@@ -139,10 +153,8 @@ func ListContainers(deploymentName string){
 func RemoveContainers(deploymentName string){
 	ctx := context.Background()
 
-	apiClient, err := client.New(client.FromEnv)
-	if err != nil {
-		log.Fatal(err)
-	}
+	apiClient := initDockerClient()
+
 	defer apiClient.Close()
 
 	filters := make(client.Filters)
