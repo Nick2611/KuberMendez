@@ -24,12 +24,13 @@ func catchDockerNotRunningError(){
 func initDockerClient() client.APIClient{
 	apiClient, err := client.New(client.FromEnv) //TODO Implementar mas funciones 
 	if err != nil {
+		panic(err)
 	}
 
 	return apiClient
 }
 
-func DockerRun(spec parser.Container, deploymentName string) {
+func DockerRun(spec parser.Container, deploymentName string) error {
 
 	ctx := context.Background()
 	apiClient := initDockerClient()
@@ -51,12 +52,12 @@ func DockerRun(spec parser.Container, deploymentName string) {
 	for _, port := range spec.Ports {
 		p, err := network.ParsePort(fmt.Sprintf("%d/tcp", port.ContainerPort))
 		if err != nil {
-			panic(err)
+			return err
 		}
 		exposedPorts[p] = struct{}{}
 		hostIP, err := netip.ParseAddr("127.0.0.1")
 		if err != nil{
-			panic(err)
+			return err
 		}
 
 		if port.HostPort != nil{
@@ -74,10 +75,13 @@ func DockerRun(spec parser.Container, deploymentName string) {
 	if err != nil {
 		if client.IsErrConnectionFailed(err){
 			catchDockerNotRunningError()
+			return err
 
 		} else if errdefs.NotFound(err) != nil {
-			log.Fatal("Image not found", image)
+			fmt.Println("Image not found", image)
+			return err 	//TODO Probablemente no sea la mejor manera de manejar errores
 		}
+		return err
 	}
 	io.Copy(os.Stdout, reader)
 
@@ -97,11 +101,11 @@ func DockerRun(spec parser.Container, deploymentName string) {
 		},
 	})
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	if startResult, err := apiClient.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
-		panic(err)
+		return err
 	}else{
 		fmt.Println(startResult)
 	}
@@ -109,13 +113,15 @@ func DockerRun(spec parser.Container, deploymentName string) {
 
 	out, err := apiClient.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
+
+	return nil
 }
 
-func ListContainers(deploymentName string){
+func ListContainers(deploymentName string) error {
 
 	ctx := context.Background()
 
@@ -135,6 +141,7 @@ func ListContainers(deploymentName string){
 	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
 	if err != nil {
 		log.Fatal(err)
+		return err
 	}
 
 
@@ -147,6 +154,8 @@ func ListContainers(deploymentName string){
 	for _, container := range containers.Items {
 		fmt.Println(container.Names) 
 	}
+
+	return nil
 
 }
 

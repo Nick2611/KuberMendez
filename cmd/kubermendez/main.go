@@ -48,14 +48,18 @@ func check(err error) {
 	}
 }
 
-func getFile(fileName string) []byte {
+func getFile(fileName string) ([]byte, error) {
 	absPath, err := filepath.Abs(fileName)
-	check(err)
+	if err != nil{
+		return nil, fmt.Errorf("Bad filepath %q: %w", fileName, err)
+	}
 
 	data, err := os.ReadFile(absPath)
-	check(err)
+	if err != nil {
+		return nil, fmt.Errorf("Read file %q: %w", absPath, err)
+	}
 
-	return data
+	return data, nil
 }
 
 func main(){
@@ -65,10 +69,12 @@ func main(){
 
 	switch{
 	case args.Apply != nil:
-		file := getFile(args.Apply.File)
+		file, _ := getFile(args.Apply.File)
 		parsed_yaml, err := parser.Parser(file)
-
-		check(err)
+		if err != nil{
+			fmt.Println(fmt.Errorf("Error parsing file %q: %w", file, err))
+			os.Exit(1)
+		}
 		
 		var deploymentName string = parsed_yaml.Metadata.Name
 		var containers []parser.Container = parsed_yaml.Spec.Template.Spec.Containers
@@ -82,7 +88,7 @@ func main(){
 
 	case args.Validate != nil:
 		if args.Validate.File != ""{
-			file := getFile(args.Validate.File)
+			file, _ := getFile(args.Validate.File)
 			status := parser.Validation(file)
 
 			if status == nil{
