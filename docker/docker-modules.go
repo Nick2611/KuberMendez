@@ -21,19 +21,19 @@ func catchDockerNotRunningError(){
 	log.Fatal("Docker Daemon not running.") //TODO Usar otra cosa que no sea log.Fatal
 }
 
-func initDockerClient() client.APIClient{
-	apiClient, err := client.New(client.FromEnv) //TODO Implementar mas funciones 
-	if err != nil {
-		panic(err)
-	}
+func initDockerClient() (client.APIClient, error) {
+	apiClient, err := client.New(client.FromEnv)
 
-	return apiClient
+	return apiClient, err
 }
 
 func DockerRun(spec parser.Container, deploymentName string) error {
 
 	ctx := context.Background()
-	apiClient := initDockerClient()
+	apiClient, err := initDockerClient()
+	if err != nil {
+		return fmt.Errorf("create docker client: %w", err)
+	}
 
 	defer apiClient.Close()
 
@@ -52,12 +52,12 @@ func DockerRun(spec parser.Container, deploymentName string) error {
 	for _, port := range spec.Ports {
 		p, err := network.ParsePort(fmt.Sprintf("%d/tcp", port.ContainerPort))
 		if err != nil {
-			return err
+			return fmt.Errorf("Parse port %d:%q", port.ContainerPort, err)
 		}
 		exposedPorts[p] = struct{}{}
 		hostIP, err := netip.ParseAddr("127.0.0.1")
 		if err != nil{
-			return err
+			return fmt.Errorf("Parse address %q:%w", hostIP, err)
 		}
 
 		if port.HostPort != nil{
@@ -79,7 +79,7 @@ func DockerRun(spec parser.Container, deploymentName string) error {
 
 		} else if errdefs.NotFound(err) != nil {
 			fmt.Println("Image not found", image)
-			return err 	//TODO Probablemente no sea la mejor manera de manejar errores
+			return fmt.Errorf("pull image %q: %w", image, err)
 		}
 		return err
 	}
@@ -101,11 +101,11 @@ func DockerRun(spec parser.Container, deploymentName string) error {
 		},
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("create container %q: %w", spec.Name, err)
 	}
 
 	if startResult, err := apiClient.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
-		return err
+		return fmt.Errorf("start container %q: %w", spec.Name, err)
 	}else{
 		fmt.Println(startResult)
 	}
@@ -113,7 +113,7 @@ func DockerRun(spec parser.Container, deploymentName string) error {
 
 	out, err := apiClient.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
-		return err
+		return fmt.Errorf("Container lgos %q:%w", resp.ID, err)
 	}
 
 	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
@@ -125,7 +125,10 @@ func ListContainers(deploymentName string) error {
 
 	ctx := context.Background()
 
-	apiClient := initDockerClient()
+	apiClient, err := initDockerClient()
+	if err != nil {
+		return fmt.Errorf("create docker client: %w", err)
+	}
 
 	defer apiClient.Close()
 
@@ -140,8 +143,7 @@ func ListContainers(deploymentName string) error {
 
 	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
 	if err != nil {
-		log.Fatal(err)
-		return err
+		return fmt.Errorf("Container list %w", err)
 	}
 
 
@@ -159,10 +161,13 @@ func ListContainers(deploymentName string) error {
 
 }
 
-func RemoveContainers(deploymentName string){
+func RemoveContainers(deploymentName string) error {
 	ctx := context.Background()
 
-	apiClient := initDockerClient()
+	apiClient, err := initDockerClient()
+	if err != nil {
+		return fmt.Errorf("create docker client: %w", err)
+	}
 
 	defer apiClient.Close()
 
@@ -171,7 +176,7 @@ func RemoveContainers(deploymentName string){
 
 	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("Container list %w", err)
 	}
 
 	if len(containers.Items) == 0{
@@ -182,15 +187,16 @@ func RemoveContainers(deploymentName string){
 		for _, container := range containers.Items {
 			_, err := apiClient.ContainerStop(ctx, container.ID, client.ContainerStopOptions{})
 			if err != nil{
-				log.Fatal(err) //TODO Convertir en funcion
+				return fmt.Errorf("Container stop %q:%w", container.ID, err)
 			}
 			_, err = apiClient.ContainerRemove(ctx, container.ID, client.ContainerRemoveOptions{})
 			if err != nil{
-				log.Fatal(err)
+				return fmt.Errorf("Container remove %q:%w", container.ID, err)
 			}
 			fmt.Println("Container", container.Names, "removed")
 		}
 	}
 
+	return nil
 
 }
