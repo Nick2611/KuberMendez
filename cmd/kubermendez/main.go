@@ -1,12 +1,17 @@
 package main
 
 import (
+	"kuberMendez/daemon"
+	"kuberMendez/deployment-parser"
+
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
+
 	"github.com/alexflint/go-arg"
-	"kuberMendez/deployment-parser"
-	"kuberMendez/docker"
 )
 
 type ApplyCMD struct {
@@ -18,28 +23,33 @@ type ValidateCMD struct {
 }
 
 type GetCMD struct {
-	Pods  *PodsCMD `arg:"subcommand: pods"`
+	Pods *PodsCMD `arg:"subcommand: pods"`
 }
 
 type PodsCMD struct {
 	DeploymentName string `arg:"-d" help:"List a specific deployment containers"`
-	All bool			  `arg:"-A" help:"List all pods"`
+	All            bool   `arg:"-A" help:"List all pods"`
 }
 
 type RemoveCMD struct {
 	Deployment string `arg:"-f, required" help:"Deletes a given deployment containers"`
-  
 }
 
-type args struct{
-	Apply *ApplyCMD			`arg:"subcommand:apply, positional" help:"Used to create deployments"`
-	Validate *ValidateCMD	`arg:"subcommand:validate" help:"Used to validate deployments before applying them"`
-	Get *GetCMD				`arg:"subcommand:get"`
-	Remove *RemoveCMD		`arg:"subcommand:remove"`
+type InitCMD struct{}
+
+type DaemonCMD struct{}
+
+type args struct { //TODO Aditional stop command, goroutines don't stop with ctrl c (separate process)
+	Apply    *ApplyCMD    `arg:"subcommand:apply, positional" help:"Used to create deployments"`
+	Validate *ValidateCMD `arg:"subcommand:validate" help:"Used to validate deployments before applying them"`
+	Get      *GetCMD      `arg:"subcommand:get"`
+	Remove   *RemoveCMD   `arg:"subcommand:remove"`
+	Init     *InitCMD     `arg:"subcommand:init" help:"Boot KuberMendez daemon"`
+	Daemon   *DaemonCMD   `arg:"subcommand:daemon" help:"Run the KuberMendez daemon process"`
 }
 
-func (args) Version() string{
-	return "Kubermendez v1.0" 
+func (args) Version() string {
+	return "Kubermendez v1.0"
 }
 
 func check(err error) {
@@ -50,7 +60,7 @@ func check(err error) {
 
 func getFile(fileName string) ([]byte, error) {
 	absPath, err := filepath.Abs(fileName)
-	if err != nil{
+	if err != nil {
 		return nil, fmt.Errorf("Bad filepath %q: %w", fileName, err)
 	}
 
@@ -62,50 +72,97 @@ func getFile(fileName string) ([]byte, error) {
 	return data, nil
 }
 
-func main(){
+const (
+	deploymentsDirectory = ".kubermendez/deployments"
+)
 
+func deploymentStatePath(deploymentName string) (string, error) {
+	if deploymentName == "" {
+		return "", fmt.Errorf("deployment metadata.name is required")
+	}
+	if filepath.Base(deploymentName) != deploymentName {
+		return "", fmt.Errorf("deployment metadata.name %q cannot contain path separators", deploymentName)
+	}
+
+	return filepath.Join(deploymentsDirectory, deploymentName+".yaml"), nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	var args args
 	arg.MustParse(&args)
 
-	switch{
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	switch {
+	case args.Init != nil:
+		pid, err := daemon.StartBackground()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("KuberMendez daemon started with PID %d\n", pid)
+
+	case args.Daemon != nil:
+		fmt.Println("KuberMendez daemon running")
+		daemon.InitDaemon(ctx)
+
 	case args.Apply != nil:
-		file, _ := getFile(args.Apply.File)
-		parsed_yaml, err := parser.Parser(file)
-		if err != nil{
-			fmt.Println(fmt.Errorf("Error parsing file %q: %w", file, err))
-			os.Exit(1)
+		file, err := getFile(args.Apply.File)
+		if err != nil {
+			return err
 		}
-		
-		var deploymentName string = parsed_yaml.Metadata.Name
-		var containers []parser.Container = parsed_yaml.Spec.Template.Spec.Containers
 
-		for _, container := range containers{
-			docker.DockerRun(container, deploymentName)
+		manifest, err := parser.Parser(file)
+		if err != nil {
+			return fmt.Errorf("parse deployment manifest: %w", err)
 		}
-		
 
-		fmt.Println(parsed_yaml)
+		statePath, err := deploymentStatePath(manifest.Metadata.Name)
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(deploymentsDirectory, 0755); err != nil {
+			return fmt.Errorf("create deployments state directory: %w", err)
+		}
+		if err := os.WriteFile(statePath, file, 0644); err != nil {
+			return fmt.Errorf("write deployment state: %w", err)
+		}
+		fmt.Printf("Deployment %q saved to %s\n", manifest.Metadata.Name, statePath)
+
+		return nil
 
 	case args.Validate != nil:
-		if args.Validate.File != ""{
-			file, _ := getFile(args.Validate.File)
+		if args.Validate.File != "" {
+			file, err := getFile(args.Validate.File)
+			if err != nil {
+				return err
+			}
 			status := parser.Validation(file)
 
-			if status == nil{
+			if status == nil {
 				fmt.Println("OK")
-			}else{
+			} else {
 				fmt.Println("ERROR")
 			}
 
 		}
-	case args.Get != nil:
-		if args.Get.Pods.DeploymentName != ""{
-			docker.ListContainers(args.Get.Pods.DeploymentName)
-		} else if args.Get.Pods.All{
-			docker.ListContainers("all")
-		}
-	case args.Remove != nil:
-		docker.RemoveContainers(args.Remove.Deployment)
+		// case args.Get != nil:
+		// 	if args.Get.Pods.DeploymentName != ""{
+		// 		docker.ListContainers(args.Get.Pods.DeploymentName)
+		// 	} else if args.Get.Pods.All{
+		// 		docker.ListContainers("all")
+		// 	}
+		// case args.Remove != nil:
+		// 	docker.RemoveContainers(args.Remove.Deployment)
 	}
 
+	return nil
 }

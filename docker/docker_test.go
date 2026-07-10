@@ -3,6 +3,7 @@ package docker
 import (
 	parser "kuberMendez/deployment-parser"
 	"testing"
+	"context"
 )
 
 type dockerRunInput struct {
@@ -49,7 +50,7 @@ tests := []struct {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := DockerRun(test.input.Spec, test.input.DeploymentName)
+			err := DockerRun(context.TODO(),test.input.Spec, test.input.DeploymentName)
 
 			if test.wantErr && err == nil{
 				t.Fatal("Docker returned nil error, want error")

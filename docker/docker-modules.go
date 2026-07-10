@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	parser "kuberMendez/deployment-parser"
+	"kuberMendez/deployment-parser"
 	"log"
 	"net/netip"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -27,9 +28,10 @@ func initDockerClient() (client.APIClient, error) {
 	return apiClient, err
 }
 
-func DockerRun(spec parser.Container, deploymentName string) error {
+func DockerRun(ctx context.Context, spec parser.Container, deploymentName string) error {
+	ctx, close := context.WithTimeout(ctx, 60 * time.Second)
+	defer close()
 
-	ctx := context.Background()
 	apiClient, err := initDockerClient()
 	if err != nil {
 		return fmt.Errorf("create docker client: %w", err)
