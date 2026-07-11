@@ -10,6 +10,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	// "log"
+	"strings"
+	"strconv"
 
 	"github.com/alexflint/go-arg"
 )
@@ -35,6 +38,8 @@ type RemoveCMD struct {
 	Deployment string `arg:"-f, required" help:"Deletes a given deployment containers"`
 }
 
+type StopCMD struct {}
+
 type InitCMD struct{}
 
 type DaemonCMD struct{}
@@ -46,6 +51,7 @@ type args struct { //TODO Aditional stop command, goroutines don't stop with ctr
 	Remove   *RemoveCMD   `arg:"subcommand:remove"`
 	Init     *InitCMD     `arg:"subcommand:init" help:"Boot KuberMendez daemon"`
 	Daemon   *DaemonCMD   `arg:"subcommand:daemon" help:"Run the KuberMendez daemon process"`
+	Stop 	 *StopCMD	  `arg:"subcommand:stop" help:"Stop the KuberMendez daemon"`
 }
 
 func (args) Version() string {
@@ -74,6 +80,7 @@ func getFile(fileName string) ([]byte, error) {
 
 const (
 	deploymentsDirectory = ".kubermendez/deployments"
+	daemonPidPath = ".kubermendez/daemon.pid"
 )
 
 func deploymentStatePath(deploymentName string) (string, error) {
@@ -85,6 +92,23 @@ func deploymentStatePath(deploymentName string) (string, error) {
 	}
 
 	return filepath.Join(deploymentsDirectory, deploymentName+".yaml"), nil
+}
+
+func fileToInt() (int,error){
+	bytes, err := os.ReadFile(daemonPidPath)
+	if err != nil {
+		return -1, fmt.Errorf("failed to read file: %v", err)
+	}
+
+	content := strings.TrimSpace(string(bytes))
+
+	// Parse string to int
+	num, err := strconv.Atoi(content)
+	if err != nil {
+		return -1, fmt.Errorf("failed to parse int: %v", err)
+	}
+
+	return num, nil
 }
 
 func main() {
@@ -103,15 +127,42 @@ func run() error {
 
 	switch {
 	case args.Init != nil:
-		pid, err := daemon.StartBackground()
-		if err != nil {
-			return err
+
+		if _, err := os.Stat(daemonPidPath); err == nil {
+			return fmt.Errorf("Error, daemon already running")
+		} else {
+			pid, err := daemon.StartBackground()
+			if err != nil {
+				return err
+			}
+			fmt.Printf("KuberMendez daemon started with PID %d\n", pid)
 		}
-		fmt.Printf("KuberMendez daemon started with PID %d\n", pid)
 
 	case args.Daemon != nil:
 		fmt.Println("KuberMendez daemon running")
 		daemon.InitDaemon(ctx)
+		
+	
+	case args.Stop != nil:
+
+		if _, err := os.Stat(daemonPidPath); err != nil {
+			return fmt.Errorf("Error, daemon is not running")
+		} else {
+			num, err := fileToInt()
+			if err != nil{
+				panic(err)
+			}
+			process, err := os.FindProcess(num)
+			if err != nil {
+				fmt.Printf("Failed to find process: %v\n", err)
+			}
+			err = process.Signal(syscall.SIGTERM)
+			if err != nil {
+				fmt.Printf("Failed to send SIGTERM: %v\n", err)
+			}
+
+			fmt.Printf("Process %v finished\n", num)
+		}
 
 	case args.Apply != nil:
 		file, err := getFile(args.Apply.File)

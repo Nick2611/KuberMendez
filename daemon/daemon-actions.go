@@ -65,5 +65,12 @@ func InitDaemon(ctx context.Context) {
 	}()
 
 	<-ctx.Done()
+	deletePid()
 	wg.Wait()
+
+	fmt.Println("All kubermendez components closed")
+}
+
+func deletePid(){
+	os.Remove(filepath.Join(stateDirectory, "daemon.pid"))
 }
