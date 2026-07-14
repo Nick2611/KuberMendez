@@ -1,18 +1,22 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"kuberMendez/daemon"
 	"kuberMendez/deployment-parser"
-
-	"context"
-	"fmt"
+	"kuberMendez/events"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"syscall"
-	// "log"
-	"strings"
 	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/alexflint/go-arg"
 )
@@ -38,7 +42,7 @@ type RemoveCMD struct {
 	Deployment string `arg:"-f, required" help:"Deletes a given deployment containers"`
 }
 
-type StopCMD struct {}
+type StopCMD struct{}
 
 type InitCMD struct{}
 
@@ -51,7 +55,7 @@ type args struct { //TODO Aditional stop command, goroutines don't stop with ctr
 	Remove   *RemoveCMD   `arg:"subcommand:remove"`
 	Init     *InitCMD     `arg:"subcommand:init" help:"Boot KuberMendez daemon"`
 	Daemon   *DaemonCMD   `arg:"subcommand:daemon" help:"Run the KuberMendez daemon process"`
-	Stop 	 *StopCMD	  `arg:"subcommand:stop" help:"Stop the KuberMendez daemon"`
+	Stop     *StopCMD     `arg:"subcommand:stop" help:"Stop the KuberMendez daemon"`
 }
 
 func (args) Version() string {
@@ -78,9 +82,45 @@ func getFile(fileName string) ([]byte, error) {
 	return data, nil
 }
 
+func doRequest(client *http.Client, req *http.Request, userAgent string) (io.ReadCloser, string, error) {
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	if resp.StatusCode > 399 {
+		resp.Body.Close()
+		return nil, "", fmt.Errorf("error: %q %s", resp.Request.URL.String(), resp.Status)
+	}
+	return resp.Body, resp.Header.Get("Content-Type"), nil
+}
+
+func Get(client *http.Client, requestUrl, userAgent string) (io.ReadCloser, string, error) {
+	req, err := http.NewRequest("GET", requestUrl, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	return doRequest(client, req, userAgent)
+}
+
+func Post(client *http.Client, requestUrl, userAgent string, message events.Message) (io.ReadCloser, string, error) {
+	body, err := json.Marshal(message)
+	if err != nil {
+		return nil, "", err
+	}
+
+	req, err := http.NewRequest("POST", requestUrl, bytes.NewReader(body))
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return doRequest(client, req, userAgent)
+}
+
 const (
 	deploymentsDirectory = ".kubermendez/deployments"
-	daemonPidPath = ".kubermendez/daemon.pid"
+	daemonPidPath        = ".kubermendez/daemon.pid"
 )
 
 func deploymentStatePath(deploymentName string) (string, error) {
@@ -94,7 +134,7 @@ func deploymentStatePath(deploymentName string) (string, error) {
 	return filepath.Join(deploymentsDirectory, deploymentName+".yaml"), nil
 }
 
-func fileToInt() (int,error){
+func fileToInt() (int, error) {
 	bytes, err := os.ReadFile(daemonPidPath)
 	if err != nil {
 		return -1, fmt.Errorf("failed to read file: %v", err)
@@ -141,15 +181,14 @@ func run() error {
 	case args.Daemon != nil:
 		fmt.Println("KuberMendez daemon running")
 		daemon.InitDaemon(ctx)
-		
-	
+
 	case args.Stop != nil:
 
 		if _, err := os.Stat(daemonPidPath); err != nil {
 			return fmt.Errorf("Error, daemon is not running")
 		} else {
 			num, err := fileToInt()
-			if err != nil{
+			if err != nil {
 				panic(err)
 			}
 			process, err := os.FindProcess(num)
@@ -187,6 +226,20 @@ func run() error {
 			return fmt.Errorf("write deployment state: %w", err)
 		}
 		fmt.Printf("Deployment %q saved to %s\n", manifest.Metadata.Name, statePath)
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		body, _, err := Post(
+			client,
+			"http://localhost:8080/events/reconcile",
+			"KuberMendez/1.0",
+			events.Message{DeploymentName: manifest.Metadata.Name+".yaml"},
+		)
+		if err != nil {
+			return fmt.Errorf("notify daemon reconcile: %w", err)
+		}
+		defer body.Close()
+
+		fmt.Println("Reconcile started")
 
 		return nil
 

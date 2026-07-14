@@ -1,18 +1,19 @@
 package docker
 
 import (
+	"context"
 	parser "kuberMendez/deployment-parser"
 	"testing"
-	"context"
+	"time"
 )
 
 type dockerRunInput struct {
 	DeploymentName string
-	Spec           parser.Container
+	Replicas 	   int
+	Spec           []parser.Container
 }
 
 func TestDockerContainerRun(t *testing.T) {
-	hostPort := 8080
 
 tests := []struct {
 	name    string
@@ -23,15 +24,29 @@ tests := []struct {
 			name: "test valid container creation",
 			input: dockerRunInput{
 				DeploymentName: "test-deployment",
-				Spec: parser.Container{
-					Name:  "nginx",
-					Image: "nginx",
-					Ports: []parser.Port{
-						{
-							ContainerPort: 80,
-							HostPort:      &hostPort,
+				Replicas: 3,
+				Spec: []parser.Container{
+					{
+						Name:  "nginx",
+						Image: "nginx",
+						Ports: []parser.Port{
+							{
+								ContainerPort: 80,
+								HostPort:      true,
+							},
 						},
 					},
+					{
+						Name:  "rabbitmq",
+						Image: "rabbitmq",
+						Ports: []parser.Port{
+							{
+								ContainerPort: 80,
+								HostPort:      true,
+							},
+						},	
+					},
+
 				},
 			},
 			wantErr: false,
@@ -40,26 +55,34 @@ tests := []struct {
 			name: "test bad image container creation",
 			input: dockerRunInput{
 				DeploymentName: "test-deployment",
-				Spec: parser.Container{
-					Name: "nginx",
-					Image: "fakeimagfsd",
+				Spec: []parser.Container{
+					{
+						Name: "nginx",
+						Image: "fakeimagfsd",
+					},
 				},
 			},
 			wantErr: true,
 		},
 	}
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := DockerRun(context.TODO(),test.input.Spec, test.input.DeploymentName)
+			for _, container := range test.input.Spec{
+				err := DockerRun(context.TODO(),container, test.input.DeploymentName, test.input.Replicas)
 
-			if test.wantErr && err == nil{
-				t.Fatal("Docker returned nil error, want error")
-			}
+				if test.wantErr && err == nil{
+					t.Fatal("Docker returned nil error, want error")
+				}
 
-			if !test.wantErr && err != nil {
-				t.Fatalf("Docker returned error, want nil: %v", err)
+				if !test.wantErr && err != nil {
+					t.Fatalf("Docker returned error, want nil: %v", err)		
+				}
+
 			}
 		})
+		time.Sleep(10 * time.Second)
+		RemoveContainers("test-deployment")
 	}
 }
 
@@ -88,6 +111,8 @@ func TestListContainers(t *testing.T){
 			if !test.wantErr && err != nil {
 				t.Fatalf("ContainerList returned error, want nil: %v", err)
 			}
+
+			RemoveContainers("test-deployment")
 		})
 	}
 }

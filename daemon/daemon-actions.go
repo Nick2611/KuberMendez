@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	apiserver "kuberMendez/api-server"
+	"kuberMendez/events"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,16 +53,17 @@ func StartBackground() (int, error) {
 }
 
 func InitDaemon(ctx context.Context) {
+	eventStream := make(chan events.Message, 1)
 	var wg sync.WaitGroup
 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		apiserver.Start(ctx)
+		apiserver.Start(ctx, eventStream)
 	}()
 	go func() {
 		defer wg.Done()
-		InitReconcile(ctx)
+		InitReconcile(ctx, eventStream)
 	}()
 
 	<-ctx.Done()
@@ -71,6 +73,6 @@ func InitDaemon(ctx context.Context) {
 	fmt.Println("All kubermendez components closed")
 }
 
-func deletePid(){
+func deletePid() {
 	os.Remove(filepath.Join(stateDirectory, "daemon.pid"))
 }

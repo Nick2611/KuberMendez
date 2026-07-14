@@ -22,9 +22,9 @@ type Metadata struct {
 }
 
 type DeploymentSpec struct {
-	Replicas int      `yaml:"replicas"`
+	Replicas int      `yaml:"replicas"` //should validate this more rigorously 
 	Selector Selector `yaml:"selector" validate:"required"`
-	Template Template `yaml:"template" validate:"required"`
+	Template Template `yaml:"template" validate:"required"` 
 }
 
 type Selector struct {
@@ -54,7 +54,7 @@ type Container struct {
 
 type Port struct {
 	ContainerPort int `yaml:"containerPort"`
-	HostPort *int	  `yaml:"hostPort"`
+	HostPort bool	  `yaml:"hostPort"`
 }
 
 type EnvVar struct {

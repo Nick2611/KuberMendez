@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: Nico
 spec:
+  replicas: 3
   selector:
     matchLabels:
       app: nico-nginx
@@ -13,10 +14,9 @@ spec:
       labels:
         app: nico-nginx
     spec:
-      replicas: 3
       containers:
         - name: nginx
-          image: pufd23
+          image: nginx
           ports:
             - containerPort: 80
-              hostPort: 8080
+              hostPort: true

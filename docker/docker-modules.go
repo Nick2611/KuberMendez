@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/netip"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -28,7 +27,7 @@ func initDockerClient() (client.APIClient, error) {
 	return apiClient, err
 }
 
-func DockerRun(ctx context.Context, spec parser.Container, deploymentName string) error {
+func DockerRun(ctx context.Context, spec parser.Container, deploymentName string, replicas int) error {
 	ctx, close := context.WithTimeout(ctx, 60 * time.Second)
 	defer close()
 
@@ -48,30 +47,31 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 		}
 	}
 
-	exposedPorts := make(network.PortSet)
-	hostPorts := make(network.PortMap)
+	portBindings := make(network.PortMap)
 
 	for _, port := range spec.Ports {
 		p, err := network.ParsePort(fmt.Sprintf("%d/tcp", port.ContainerPort))
 		if err != nil {
 			return fmt.Errorf("Parse port %d:%q", port.ContainerPort, err)
 		}
-		exposedPorts[p] = struct{}{}
+		portBindings[p] = []network.PortBinding{}
 		hostIP, err := netip.ParseAddr("127.0.0.1")
 		if err != nil{
 			return fmt.Errorf("Parse address %q:%w", hostIP, err)
 		}
 
-		if port.HostPort != nil{
+		if port.HostPort{
 			hostPort := network.PortBinding{
 				HostIP: hostIP,
-				HostPort: strconv.Itoa(*port.HostPort),
+				HostPort: "",
 			}
-			hostPorts[p] = append(hostPorts[p], hostPort)
+			portBindings[p] = append(portBindings[p], hostPort)
 
 		}
 
 	}
+
+	fmt.Println(portBindings)
 
 	reader, err := apiClient.ImagePull(ctx, fmt.Sprintf("docker.io/library/%v", image), client.ImagePullOptions{})
 	if err != nil {
@@ -87,38 +87,41 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 	}
 	io.Copy(os.Stdout, reader)
 
-	resp, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Image: image,
-		Name: spec.Name,
-		Config: &container.Config{
-			Labels: map[string]string{
-				"creator": "Kubermendez",
-				"DeploymentName": deploymentName,
+	for i := 1; i <= replicas; i++{
+		resp, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Image: image,
+			Name: spec.Name + fmt.Sprintf("%v", i),
+			Config: &container.Config{
+				Labels: map[string]string{
+					"creator": "Kubermendez",
+					"DeploymentName": deploymentName,
+				},
+				Env: envList,
 			},
-			ExposedPorts: exposedPorts,
-			Env: envList,
-		},
-		HostConfig: &container.HostConfig{
-			PortBindings: hostPorts,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("create container %q: %w", spec.Name, err)
+			HostConfig: &container.HostConfig{
+				PortBindings: portBindings,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("create container %q: %w", spec.Name, err)
+		}
+
+		if startResult, err := apiClient.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+			return fmt.Errorf("start container %q: %w", spec.Name, err)
+		}else{
+			fmt.Println(startResult)
+		}
+
+
+		out, err := apiClient.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+		if err != nil {
+			return fmt.Errorf("Container lgos %q:%w", resp.ID, err)
+		}
+
+		stdcopy.StdCopy(os.Stdout, os.Stderr, out)
 	}
 
-	if startResult, err := apiClient.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("start container %q: %w", spec.Name, err)
-	}else{
-		fmt.Println(startResult)
-	}
 
-
-	out, err := apiClient.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
-	if err != nil {
-		return fmt.Errorf("Container lgos %q:%w", resp.ID, err)
-	}
-
-	stdcopy.StdCopy(os.Stdout, os.Stderr, out)
 
 	return nil
 }
