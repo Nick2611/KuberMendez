@@ -1,20 +1,18 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
+
+	apiserver "kuberMendez/api-server"
 	"kuberMendez/daemon"
 	"kuberMendez/deployment-parser"
-	"kuberMendez/events"
+	"kuberMendez/utils"
+
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
-	"strings"
+
 	"syscall"
 	"time"
 
@@ -68,88 +66,13 @@ func check(err error) {
 	}
 }
 
-func getFile(fileName string) ([]byte, error) {
-	absPath, err := filepath.Abs(fileName)
-	if err != nil {
-		return nil, fmt.Errorf("Bad filepath %q: %w", fileName, err)
-	}
-
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("Read file %q: %w", absPath, err)
-	}
-
-	return data, nil
-}
-
-func doRequest(client *http.Client, req *http.Request, userAgent string) (io.ReadCloser, string, error) {
-	req.Header.Set("User-Agent", userAgent)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	if resp.StatusCode > 399 {
-		resp.Body.Close()
-		return nil, "", fmt.Errorf("error: %q %s", resp.Request.URL.String(), resp.Status)
-	}
-	return resp.Body, resp.Header.Get("Content-Type"), nil
-}
-
-func Get(client *http.Client, requestUrl, userAgent string) (io.ReadCloser, string, error) {
-	req, err := http.NewRequest("GET", requestUrl, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	return doRequest(client, req, userAgent)
-}
-
-func Post(client *http.Client, requestUrl, userAgent string, message events.Message) (io.ReadCloser, string, error) {
-	body, err := json.Marshal(message)
-	if err != nil {
-		return nil, "", err
-	}
-
-	req, err := http.NewRequest("POST", requestUrl, bytes.NewReader(body))
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return doRequest(client, req, userAgent)
-}
 
 const (
 	deploymentsDirectory = ".kubermendez/deployments"
 	daemonPidPath        = ".kubermendez/daemon.pid"
 )
 
-func deploymentStatePath(deploymentName string) (string, error) {
-	if deploymentName == "" {
-		return "", fmt.Errorf("deployment metadata.name is required")
-	}
-	if filepath.Base(deploymentName) != deploymentName {
-		return "", fmt.Errorf("deployment metadata.name %q cannot contain path separators", deploymentName)
-	}
 
-	return filepath.Join(deploymentsDirectory, deploymentName+".yaml"), nil
-}
-
-func fileToInt() (int, error) {
-	bytes, err := os.ReadFile(daemonPidPath)
-	if err != nil {
-		return -1, fmt.Errorf("failed to read file: %v", err)
-	}
-
-	content := strings.TrimSpace(string(bytes))
-
-	// Parse string to int
-	num, err := strconv.Atoi(content)
-	if err != nil {
-		return -1, fmt.Errorf("failed to parse int: %v", err)
-	}
-
-	return num, nil
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -187,7 +110,7 @@ func run() error {
 		if _, err := os.Stat(daemonPidPath); err != nil {
 			return fmt.Errorf("Error, daemon is not running")
 		} else {
-			num, err := fileToInt()
+			num, err := utils.FileToInt(daemonPidPath)
 			if err != nil {
 				panic(err)
 			}
@@ -204,7 +127,7 @@ func run() error {
 		}
 
 	case args.Apply != nil:
-		file, err := getFile(args.Apply.File)
+		file, err := utils.GetFile(args.Apply.File)
 		if err != nil {
 			return err
 		}
@@ -214,7 +137,7 @@ func run() error {
 			return fmt.Errorf("parse deployment manifest: %w", err)
 		}
 
-		statePath, err := deploymentStatePath(manifest.Metadata.Name)
+		statePath, err := utils.DeploymentStatePath(manifest.Metadata.Name, deploymentsDirectory)
 		if err != nil {
 			return err
 		}
@@ -227,12 +150,12 @@ func run() error {
 		}
 		fmt.Printf("Deployment %q saved to %s\n", manifest.Metadata.Name, statePath)
 
-		client := &http.Client{Timeout: 5 * time.Second}
-		body, _, err := Post(
+		client := &http.Client{Timeout: 60 * time.Second}
+		body, _, err := utils.Post(
 			client,
 			"http://localhost:8080/events/reconcile",
 			"KuberMendez/1.0",
-			events.Message{DeploymentName: manifest.Metadata.Name+".yaml"},
+			apiserver.ChannelMessageDto{DeploymentName: manifest.Metadata.Name+".yaml"},
 		)
 		if err != nil {
 			return fmt.Errorf("notify daemon reconcile: %w", err)
@@ -245,7 +168,7 @@ func run() error {
 
 	case args.Validate != nil:
 		if args.Validate.File != "" {
-			file, err := getFile(args.Validate.File)
+			file, err := utils.GetFile(args.Validate.File)
 			if err != nil {
 				return err
 			}
