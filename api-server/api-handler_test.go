@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +31,7 @@ func TestCallReconcileReturnsSuccess(t *testing.T) {
 		close(handled)
 	}()
 
-	response := performReconcileRequest(router, `{"deploymentName":"Nico.yaml"}`)
+	response := performReconcileRequest(router, reconcileRequestBody(t))
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body: %s", response.Code, http.StatusOK, response.Body.String())
@@ -64,7 +66,7 @@ func TestCallReconcileReturnsBusyWhenQueueIsFull(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := setupRouter(make(chan ApplyRequestDto))
 
-	response := performReconcileRequest(router, `{"deploymentName":"Nico.yaml"}`)
+	response := performReconcileRequest(router, reconcileRequestBody(t))
 
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d; body: %s", response.Code, http.StatusConflict, response.Body.String())
@@ -85,7 +87,7 @@ func TestCallReconcileReturnsReconcileError(t *testing.T) {
 		}
 	}()
 
-	response := performReconcileRequest(router, `{"deploymentName":"Nico.yaml"}`)
+	response := performReconcileRequest(router, reconcileRequestBody(t))
 
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d; body: %s", response.Code, http.StatusInternalServerError, response.Body.String())
@@ -107,4 +109,47 @@ func performReconcileRequest(router http.Handler, body string) *httptest.Respons
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response
+}
+
+func reconcileRequestBody(t *testing.T) string {
+	t.Helper()
+
+	payload, err := json.Marshal(SaveDeploymentRequestDto{
+		DeploymentName: writeDeploymentManifest(t),
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	return string(payload)
+}
+
+func writeDeploymentManifest(t *testing.T) string {
+	t.Helper()
+
+	filePath := filepath.Join(t.TempDir(), "deployment.yaml")
+	content := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: Nico
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nico-nginx
+  template:
+    metadata:
+      labels:
+        app: nico-nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+`
+
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		t.Fatalf("write deployment manifest: %v", err)
+	}
+
+	return filePath
 }

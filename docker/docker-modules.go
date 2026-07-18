@@ -10,13 +10,24 @@ import (
 	"os"
 	"time"
 
+
+	"github.com/docker/docker/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
-
-	"github.com/docker/docker/errdefs"
+	"github.com/devjefster/GoShortUniqueID/idgen"
 )
+
+type ContainerSummary struct {
+	ID     string
+	Labels map[string]string
+	Names  []string
+	Image  string
+	Status string
+	Ports  []container.PortSummary
+}
+
 func catchDockerNotRunningError(){
 	log.Fatal("Docker Daemon not running.") //TODO Usar otra cosa que no sea log.Fatal
 }
@@ -40,6 +51,8 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 
 	var image string = spec.Image
 	var envList []string
+
+	idGen := idgen.New(6, "", "")
 
 	if len(spec.Env) != 0{
 		for _, env := range spec.Env{
@@ -71,8 +84,6 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 
 	}
 
-	fmt.Println(portBindings)
-
 	reader, err := apiClient.ImagePull(ctx, fmt.Sprintf("docker.io/library/%v", image), client.ImagePullOptions{})
 	if err != nil {
 		if client.IsErrConnectionFailed(err){
@@ -90,10 +101,10 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 	for i := 1; i <= replicas; i++{
 		resp, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
 			Image: image,
-			Name: spec.Name + fmt.Sprintf("%v", i),
+			Name: fmt.Sprintf("%v_%v", spec.Name, idGen.Generate()),
 			Config: &container.Config{
 				Labels: map[string]string{
-					"creator": "Kubermendez",
+					"Creator": "Kubermendez",
 					"DeploymentName": deploymentName,
 				},
 				Env: envList,
@@ -126,44 +137,52 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 	return nil
 }
 
-func ListContainers(deploymentName string) error {
-
-	ctx := context.Background()
+func ListContainers(ctx context.Context, deploymentName string,) ([]ContainerSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 
 	apiClient, err := initDockerClient()
 	if err != nil {
-		return fmt.Errorf("create docker client: %w", err)
+		return nil, fmt.Errorf("create Docker client: %w", err)
 	}
-
 	defer apiClient.Close()
 
 	filters := make(client.Filters)
 
-	if deploymentName != "all"{
-		filters.Add("label",fmt.Sprintf("DeploymentName=%v",deploymentName))
-
-	} else{
-		filters.Add("label","creator=Kubermendez")
+	if deploymentName == "all" {
+		filters.Add("label", "creator=Kubermendez")
+	} else {
+		filters.Add(
+			"label",
+			fmt.Sprintf("DeploymentName=%s", deploymentName),
+		)
 	}
 
-	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
+	containers, err := apiClient.ContainerList(
+		ctx,
+		client.ContainerListOptions{
+			Filters: filters,
+			All:     true,
+		},
+	)
 	if err != nil {
-		return fmt.Errorf("Container list %w", err)
+		return nil, fmt.Errorf("list containers: %w", err)
 	}
 
-
-	if len(containers.Items) == 0 && deploymentName != "all"{
-		fmt.Println("There are no containers associated with that deployment name")
-	} else if len(containers.Items) == 0 && deploymentName == "all"{
-		fmt.Println("There are no containers up")
-	}
+	result := make([]ContainerSummary, 0, len(containers.Items))
 
 	for _, container := range containers.Items {
-		fmt.Println(container.Names) 
+		result = append(result, ContainerSummary{
+			ID:     container.ID,
+			Labels: container.Labels,
+			Names:  container.Names,
+			Image:  container.Image,
+			Status: container.Status,
+			Ports:  container.Ports,
+		})
 	}
 
-	return nil
-
+	return result, nil
 }
 
 func RemoveContainers(deploymentName string) error {

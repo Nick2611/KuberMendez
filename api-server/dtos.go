@@ -1,11 +1,15 @@
 package apiserver
 
-type ChannelMessageDto struct {
+// import (
+// 	"github.com/moby/moby/api/types/container"
+// )
+
+type SaveDeploymentRequestDto struct {
 	DeploymentName string `json:"deploymentName" binding:"required"`
 }
 
 type ApplyRequestDto struct {
-	Message ChannelMessageDto
+	Message SaveDeploymentRequestDto
 	Reply   chan ReconcileResultDto `json:"-"`
 }
 
@@ -19,4 +23,23 @@ type ReconcileResultDto struct {
 	DeploymentName string `json:"deploymentName"`
 	Created        bool   `json:"created"`
 	Err            error  `json:"-"`
+}
+
+
+type GetDeploymentStatusRequestDto struct {
+	DeploymentName string `form:"deploymentName" binding:"required"`
+}
+
+// type GetDeploymentStatusResponseDto struct {
+// 	ID string							`json:"id"`
+// 	Labels map[string]string			`json:"labels"`
+// 	Name []string						`json:"name"`
+// 	Image string						`json:"image"`
+// 	Status string						`json:"status"`
+// 	Port []container.PortSummary		`json:"port"`
+// }
+
+type GetDeploymentStatusResponseDto struct{
+	DeploymentName	string	`json:"deploymentName"`
+	Replicas		int		`json:"replicas"`
 }

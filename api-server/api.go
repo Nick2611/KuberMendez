@@ -40,9 +40,8 @@ func setupRouter(eventStream chan<- ApplyRequestDto) *gin.Engine {
 
 	r.POST("/events/reconcile", CallReconcile(eventStream))
 
-	r.POST("/events/save", func(ctx *gin.Context) {
-
-	})
+	r.GET("/status", GetDeploymentStatus())
+	//TODO get /status/all endpoint (debug endpoint?)
 
 	return r
 }

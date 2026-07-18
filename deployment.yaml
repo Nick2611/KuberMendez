@@ -1,7 +1,7 @@
 apiVersion: 123
 kind: Deployment
 metadata:
-  name: Nico
+  name: Pico
 spec:
   replicas: 3
   selector:

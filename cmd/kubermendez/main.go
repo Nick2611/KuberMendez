@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 
-	apiserver "kuberMendez/api-server"
 	"kuberMendez/daemon"
 	"kuberMendez/deployment-parser"
 	"kuberMendez/utils"
@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"syscall"
 	"time"
@@ -66,13 +67,10 @@ func check(err error) {
 	}
 }
 
-
 const (
 	deploymentsDirectory = ".kubermendez/deployments"
 	daemonPidPath        = ".kubermendez/daemon.pid"
 )
-
-
 
 func main() {
 	if err := run(); err != nil {
@@ -127,35 +125,17 @@ func run() error {
 		}
 
 	case args.Apply != nil:
-		file, err := utils.GetFile(args.Apply.File)
+		filePath, err := filepath.Abs(args.Apply.File)
 		if err != nil {
-			return err
+			return fmt.Errorf("resolve deployment file path: %w", err)
 		}
-
-		manifest, err := parser.Parser(file)
-		if err != nil {
-			return fmt.Errorf("parse deployment manifest: %w", err)
-		}
-
-		statePath, err := utils.DeploymentStatePath(manifest.Metadata.Name, deploymentsDirectory)
-		if err != nil {
-			return err
-		}
-
-		if err := os.MkdirAll(deploymentsDirectory, 0755); err != nil {
-			return fmt.Errorf("create deployments state directory: %w", err)
-		}
-		if err := os.WriteFile(statePath, file, 0644); err != nil {
-			return fmt.Errorf("write deployment state: %w", err)
-		}
-		fmt.Printf("Deployment %q saved to %s\n", manifest.Metadata.Name, statePath)
 
 		client := &http.Client{Timeout: 60 * time.Second}
 		body, _, err := utils.Post(
 			client,
 			"http://localhost:8080/events/reconcile",
 			"KuberMendez/1.0",
-			apiserver.ChannelMessageDto{DeploymentName: manifest.Metadata.Name+".yaml"},
+			map[string]string{"deploymentName": filePath},
 		)
 		if err != nil {
 			return fmt.Errorf("notify daemon reconcile: %w", err)
@@ -181,12 +161,33 @@ func run() error {
 			}
 
 		}
-		// case args.Get != nil:
-		// 	if args.Get.Pods.DeploymentName != ""{
-		// 		docker.ListContainers(args.Get.Pods.DeploymentName)
-		// 	} else if args.Get.Pods.All{
-		// 		docker.ListContainers("all")
-		// 	}
+	case args.Get != nil:
+		client := &http.Client{Timeout: 60 * time.Second}
+
+		if args.Get.Pods.DeploymentName != "" {
+			body, _, err := utils.Get(
+				client,
+				fmt.Sprintf("http://localhost:8080/status?deploymentName=%v", args.Get.Pods.DeploymentName),
+				"KuberMendez/1.0",
+			)
+			if err != nil {
+				return fmt.Errorf("notify daemon reconcile: %w", err)
+			}
+			defer body.Close()
+			bodyBytes, err := io.ReadAll(body)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			fmt.Println(string(bodyBytes)) //TODO Improve JSON formatting
+
+			return nil
+		}
+
+		return nil
+		// } else if args.Get.Pods.All{
+		// 	docker.ListContainers("all")
+		// }
 		// case args.Remove != nil:
 		// 	docker.RemoveContainers(args.Remove.Deployment)
 	}

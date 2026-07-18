@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	apiserver "kuberMendez/api-server"
+	parser "kuberMendez/deployment-parser"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+)
+
+const (
+	DefaultDeploymentsDirectory = ".kubermendez/deployments"
 )
 
 //HTTP HELPER FUNCTIONS
@@ -37,7 +41,7 @@ func Get(client *http.Client, requestUrl, userAgent string) (io.ReadCloser, stri
 	return doRequest(client, req, userAgent)
 }
 
-func Post(client *http.Client, requestUrl, userAgent string, message apiserver.ChannelMessageDto) (io.ReadCloser, string, error) {
+func Post(client *http.Client, requestUrl, userAgent string, message map[string]string) (io.ReadCloser, string, error) {
 	body, err := json.Marshal(message)
 	if err != nil {
 		return nil, "", err
@@ -50,7 +54,6 @@ func Post(client *http.Client, requestUrl, userAgent string, message apiserver.C
 	req.Header.Set("Content-Type", "application/json")
 	return doRequest(client, req, userAgent)
 }
-
 
 // FILE HANDLERS
 
@@ -79,6 +82,34 @@ func DeploymentStatePath(deploymentName string, deploymentsDirectory string) (st
 	return filepath.Join(deploymentsDirectory, deploymentName+".yaml"), nil
 }
 
+func SaveStateFile(fileName string, deploymentsDirectory string) (string, error) {
+	file, err := GetFile(fileName)
+	if err != nil {
+		return "", err
+	}
+
+	manifest, err := parser.Parser(file)
+	if err != nil {
+		return "", err
+	}
+
+	statePath, err := DeploymentStatePath(manifest.Metadata.Name, deploymentsDirectory)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(deploymentsDirectory, 0755); err != nil {
+		return "", fmt.Errorf("create deployments state directory: %w", err)
+	}
+	if err := os.WriteFile(statePath, file, 0644); err != nil {
+		return "", fmt.Errorf("write deployment state: %w", err)
+	}
+
+	fmt.Printf("Deployment %q saved to %s\n", manifest.Metadata.Name, statePath)
+	return filepath.Base(statePath), nil
+}
+
+
 func FileToInt(daemonPidPath string) (int, error) {
 	bytes, err := os.ReadFile(daemonPidPath)
 	if err != nil {
@@ -94,4 +125,25 @@ func FileToInt(daemonPidPath string) (int, error) {
 	}
 
 	return num, nil
+}
+
+func GetFiles(dirPath string) ([][]byte, error) {
+	var fileNames [][]byte
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			file, err := os.ReadFile(fmt.Sprintf("%v/%v", dirPath, entry.Name()))
+			if err != nil{
+				panic(err)
+			}
+			fileNames = append(fileNames, file)
+		}
+	}
+
+	return fileNames, nil
 }
