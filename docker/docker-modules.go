@@ -185,9 +185,10 @@ func ListContainers(ctx context.Context, deploymentName string,) ([]ContainerSum
 	return result, nil
 }
 
-func RemoveContainers(deploymentName string) error {
-	ctx := context.Background()
-
+func RemoveContainers(ctx context.Context, deploymentName string) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	
 	apiClient, err := initDockerClient()
 	if err != nil {
 		return fmt.Errorf("create docker client: %w", err)

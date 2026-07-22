@@ -43,3 +43,14 @@ type GetDeploymentStatusResponseDto struct{
 	DeploymentName	string	`json:"deploymentName"`
 	Replicas		int		`json:"replicas"`
 }
+
+
+type DeleteDeploymentRequestDto struct {
+	DeploymentName string
+}
+
+type DeleteDeploymentResponseDto struct {
+	DeploymentName string
+	Status string
+	Error error
+}

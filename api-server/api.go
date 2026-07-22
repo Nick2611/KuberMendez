@@ -43,5 +43,9 @@ func setupRouter(eventStream chan<- ApplyRequestDto) *gin.Engine {
 	r.GET("/status", GetDeploymentStatus())
 	//TODO get /status/all endpoint (debug endpoint?)
 
+	r.POST("events/delete", DeleteDeployment())
+
+	r.GET("/logs", StreamLogs())
+
 	return r
 }

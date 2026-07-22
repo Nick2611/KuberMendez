@@ -41,6 +41,10 @@ type RemoveCMD struct {
 	Deployment string `arg:"-f, required" help:"Deletes a given deployment containers"`
 }
 
+type LogsCMD struct {
+	Lines int `arg:"-n" default:"50" help:"Number of log lines to show"`
+}
+
 type StopCMD struct{}
 
 type InitCMD struct{}
@@ -55,6 +59,7 @@ type args struct { //TODO Aditional stop command, goroutines don't stop with ctr
 	Init     *InitCMD     `arg:"subcommand:init" help:"Boot KuberMendez daemon"`
 	Daemon   *DaemonCMD   `arg:"subcommand:daemon" help:"Run the KuberMendez daemon process"`
 	Stop     *StopCMD     `arg:"subcommand:stop" help:"Stop the KuberMendez daemon"`
+	Logs     *LogsCMD     `arg:"subcommand:logs"`
 }
 
 func (args) Version() string {
@@ -185,11 +190,47 @@ func run() error {
 		}
 
 		return nil
-		// } else if args.Get.Pods.All{
-		// 	docker.ListContainers("all")
-		// }
-		// case args.Remove != nil:
-		// 	docker.RemoveContainers(args.Remove.Deployment)
+	// } else if args.Get.Pods.All{
+	// 	docker.ListContainers("all")
+	// }
+	case args.Remove != nil:
+		client := &http.Client{Timeout: 60 * time.Second}
+		body, _, err := utils.Post(
+			client,
+			"http://localhost:8080/events/delete",
+			"KuberMendez/1.0",
+			map[string]string{"deploymentName": args.Remove.Deployment},
+		)
+		if err != nil {
+			return fmt.Errorf("notify daemon reconcile: %w", err)
+		}
+		defer body.Close()
+
+		bodyBytes, err := io.ReadAll(body)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		fmt.Println(string(bodyBytes)) //TODO Improve JSON formatting
+
+		return nil
+
+	case args.Logs != nil:
+		client := &http.Client{Timeout: 60 * time.Second}
+		body, _, err := utils.Get(
+			client,
+			fmt.Sprintf("http://localhost:8080/logs?lines=%d", args.Logs.Lines),
+			"KuberMendez/1.0",
+		)
+		if err != nil {
+			return fmt.Errorf("read daemon logs: %w", err)
+		}
+		defer body.Close()
+		if _, err := io.Copy(os.Stdout, body); err != nil {
+			return fmt.Errorf("stream daemon logs: %w", err)
+		}
+
+		return nil
 	}
 
 	return nil

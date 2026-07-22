@@ -1,13 +1,18 @@
 package apiserver
 
 import (
-	
 	"net/http"
+	"strconv"
 
-	"kuberMendez/utils"
 	"kuberMendez/docker"
+	"kuberMendez/utils"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	defaultLogLines = 50
+	maxLogLines     = 500
 )
 
 func CallReconcile(eventStream chan<- ApplyRequestDto) gin.HandlerFunc {
@@ -92,19 +97,106 @@ func GetDeploymentStatus() gin.HandlerFunc {
 			})
 			return
 		}
-		
+
 		//provisional until I figure out what's the best way to return current state
 		//TODO
 		var currentStateFileStruct GetDeploymentStatusResponseDto
 		currentStateFileStruct.DeploymentName = req.DeploymentName
 		currentStateFileStruct.Replicas = len(containers)
 
-
 		ctx.JSON(
 			http.StatusOK,
 			currentStateFileStruct,
 		)
 	}
+}
+
+func DeleteDeployment() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		var req DeleteDeploymentRequestDto
+
+		if err := ctx.ShouldBindJSON(&req); err != nil {
+
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+
+			return
+
+		}
+
+		status, err := utils.DeleteFile(req.DeploymentName)
+		if err != nil {
+			switch status {
+			case "File does not exist":
+				ctx.JSON(http.StatusNotFound, DeleteDeploymentResponseDto{
+					DeploymentName: req.DeploymentName,
+					Status:         status,
+					Error:          err,
+				})
+			case "Unexpected error":
+				ctx.JSON(http.StatusNotFound, DeleteDeploymentResponseDto{
+					DeploymentName: req.DeploymentName,
+					Status:         status,
+					Error:          err,
+				})
+			}
+
+		}
+
+		requestContext := ctx.Request.Context()
+
+		err = docker.RemoveContainers(requestContext, req.DeploymentName)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, DeleteDeploymentResponseDto{
+				DeploymentName: req.DeploymentName,
+				Status:         "Error while removing container",
+				Error:          err,
+			})
+
+			return
+		}
+
+		ctx.JSON(http.StatusOK, DeleteDeploymentResponseDto{
+			DeploymentName: req.DeploymentName,
+			Status:         "Deployment deleted successfully",
+		})
+
+	}
+}
+
+func StreamLogs() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		lines, err := requestedLogLines(ctx.Query("lines"))
+		if err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		ctx.Header("Content-Type", "text/plain; charset=utf-8")
+		ctx.Status(http.StatusAccepted)
+		if err := utils.StreamFileTail(ctx.Writer, ".kubermendez/daemon.log", lines); err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+}
+
+func requestedLogLines(value string) (int, error) {
+	if value == "" {
+		return defaultLogLines, nil
+	}
+
+	lines, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	if lines < 0 {
+		return 0, nil
+	}
+	if lines > maxLogLines {
+		return maxLogLines, nil
+	}
+
+	return lines, nil
 }
 
 func writeReconcileResult(ctx *gin.Context, result ReconcileResultDto) {
