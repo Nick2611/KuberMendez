@@ -1,5 +1,7 @@
 package apiserver
 
+import "github.com/moby/moby/api/types/container"
+
 // import (
 // 	"github.com/moby/moby/api/types/container"
 // )
@@ -40,8 +42,10 @@ type GetDeploymentStatusRequestDto struct {
 // }
 
 type GetDeploymentStatusResponseDto struct{
-	DeploymentName	string	`json:"deploymentName"`
-	Replicas		int		`json:"replicas"`
+	DeploymentName	string					`json:"deploymentName"`
+	Image 			string					`json:"Image"`
+	Port			[]container.PortSummary	`json:"Ports"`
+	Replicas		int						`json:"replicas"`
 }
 
 

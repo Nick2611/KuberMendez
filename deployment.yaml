@@ -20,3 +20,8 @@ spec:
           ports:
             - containerPort: 80
               hostPort: false
+        - name: aamesHetfield
+          image: node
+          ports:
+            - containerPort: 80
+              hostPort: false

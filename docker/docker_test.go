@@ -9,22 +9,22 @@ import (
 
 type dockerRunInput struct {
 	DeploymentName string
-	Replicas 	   int
+	Replicas       int
 	Spec           []parser.Container
 }
 
 func TestDockerContainerRun(t *testing.T) {
 
-tests := []struct {
-	name    string
-	input   dockerRunInput
-	wantErr bool
+	tests := []struct {
+		name    string
+		input   dockerRunInput
+		wantErr bool
 	}{
 		{
 			name: "test valid container creation",
 			input: dockerRunInput{
 				DeploymentName: "test-deployment",
-				Replicas: 3,
+				Replicas:       3,
 				Spec: []parser.Container{
 					{
 						Name:  "nginx",
@@ -44,9 +44,8 @@ tests := []struct {
 								ContainerPort: 80,
 								HostPort:      true,
 							},
-						},	
+						},
 					},
-
 				},
 			},
 			wantErr: false,
@@ -57,7 +56,7 @@ tests := []struct {
 				DeploymentName: "test-deployment",
 				Spec: []parser.Container{
 					{
-						Name: "nginx",
+						Name:  "nginx",
 						Image: "fakeimagfsd",
 					},
 				},
@@ -68,43 +67,42 @@ tests := []struct {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			for _, container := range test.input.Spec{
-				err := DockerRun(context.TODO(),container, test.input.DeploymentName, test.input.Replicas)
+			for _, container := range test.input.Spec {
+				err := DockerRun(context.TODO(), container, test.input.DeploymentName, test.input.Replicas)
 
-				if test.wantErr && err == nil{
+				if test.wantErr && err == nil {
 					t.Fatal("Docker returned nil error, want error")
 				}
 
 				if !test.wantErr && err != nil {
-					t.Fatalf("Docker returned error, want nil: %v", err)		
+					t.Fatalf("Docker returned error, want nil: %v", err)
 				}
 
 			}
 		})
 		time.Sleep(10 * time.Second)
-		RemoveContainers("test-deployment")
+		RemoveContainers(context.TODO(), "test-deployment")
 	}
 }
 
-func TestListContainers(t *testing.T){
-	tests := []struct{
-		name string
-		input string
+func TestListContainers(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
 		wantErr bool
 	}{
 		{
-			name: "list deployments test",
-			input: "Nico",
+			name:    "list deployments test",
+			input:   "Nico",
 			wantErr: false,
 		},
-
 	}
 
-	for _, test := range tests{
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := ListContainers(context.TODO(), test.input)
 
-			if test.wantErr && err == nil{
+			if test.wantErr && err == nil {
 				t.Fatal("ContainerList returned nil error, want error")
 			}
 
@@ -112,7 +110,7 @@ func TestListContainers(t *testing.T){
 				t.Fatalf("ContainerList returned error, want nil: %v", err)
 			}
 
-			RemoveContainers("test-deployment")
+			RemoveContainers(context.TODO(), "test-deployment")
 		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"kuberMendez/utils"
 
 	"github.com/gin-gonic/gin"
+	"github.com/moby/moby/api/types/container"
 )
 
 const (
@@ -71,6 +72,7 @@ func CallReconcile(eventStream chan<- ApplyRequestDto) gin.HandlerFunc {
 				Deployment: req.DeploymentName,
 				Message:    "request canceled while waiting for reconciliation",
 			})
+			return
 		}
 	}
 }
@@ -98,10 +100,29 @@ func GetDeploymentStatus() gin.HandlerFunc {
 			return
 		}
 
+		if len(containers) == 0{
+			ctx.JSON(
+				http.StatusOK,
+				gin.H{
+					"Status":"No running containers",
+				},
+			)
+
+			return
+		}
+
 		//provisional until I figure out what's the best way to return current state
 		//TODO
 		var currentStateFileStruct GetDeploymentStatusResponseDto
+		var ports []container.PortSummary
+
+		for _, c := range containers{
+			ports = append(ports, c.Ports...)
+		}
+
 		currentStateFileStruct.DeploymentName = req.DeploymentName
+		currentStateFileStruct.Image = containers[0].Image
+		currentStateFileStruct.Port = ports
 		currentStateFileStruct.Replicas = len(containers)
 
 		ctx.JSON(
