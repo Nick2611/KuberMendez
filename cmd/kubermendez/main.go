@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	dockerruntime "kuberMendez/adapters/docker"
 	"kuberMendez/daemon"
 	"kuberMendez/deployment-parser"
 	"kuberMendez/utils"
@@ -106,7 +107,12 @@ func run() error {
 
 	case args.Daemon != nil:
 		fmt.Println("KuberMendez daemon running")
-		daemon.InitDaemon(ctx)
+		runtime, err := dockerruntime.NewRuntime() //will satisfy docker interface
+		if err != nil {
+			return err
+		}
+		defer runtime.Close()
+		daemon.InitDaemon(ctx, runtime)
 
 	case args.Stop != nil:
 
@@ -157,12 +163,13 @@ func run() error {
 			if err != nil {
 				return err
 			}
-			status := parser.Validation(file)
+			status := parser.Validation(file) //TODO validation endpoint logic
 
 			if status == nil {
 				fmt.Println("OK")
 			} else {
 				fmt.Println("ERROR")
+				fmt.Println(status)
 			}
 
 		}

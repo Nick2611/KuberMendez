@@ -1,10 +1,6 @@
 package apiserver
 
-import "github.com/moby/moby/api/types/container"
-
-// import (
-// 	"github.com/moby/moby/api/types/container"
-// )
+import runtimecontract "kuberMendez/runtime"
 
 type SaveDeploymentRequestDto struct {
 	DeploymentName string `json:"deploymentName" binding:"required"`
@@ -27,34 +23,23 @@ type ReconcileResultDto struct {
 	Err            error  `json:"-"`
 }
 
-
 type GetDeploymentStatusRequestDto struct {
 	DeploymentName string `form:"deploymentName" binding:"required"`
 }
 
-// type GetDeploymentStatusResponseDto struct {
-// 	ID string							`json:"id"`
-// 	Labels map[string]string			`json:"labels"`
-// 	Name []string						`json:"name"`
-// 	Image string						`json:"image"`
-// 	Status string						`json:"status"`
-// 	Port []container.PortSummary		`json:"port"`
-// }
-
-type GetDeploymentStatusResponseDto struct{
-	DeploymentName	string					`json:"deploymentName"`
-	Image 			string					`json:"Image"`
-	Port			[]container.PortSummary	`json:"Ports"`
-	Replicas		int						`json:"replicas"`
+type GetDeploymentStatusResponseDto struct {
+	DeploymentName string                      `json:"deploymentName"`
+	Image          string                      `json:"image"`
+	Ports          []runtimecontract.PortState `json:"ports"`
+	Replicas       int                         `json:"replicas"`
 }
 
-
 type DeleteDeploymentRequestDto struct {
-	DeploymentName string
+	DeploymentName string `json:"deploymentName" binding:"required"`
 }
 
 type DeleteDeploymentResponseDto struct {
-	DeploymentName string
-	Status string
-	Error error
+	DeploymentName string `json:"deploymentName"`
+	Status         string `json:"status"`
+	Error          string `json:"error,omitempty"`
 }

@@ -2,16 +2,15 @@ package docker
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
-	"kuberMendez/deployment-parser"
 	"net/netip"
 	"os"
-	"sort"
 	"strings"
 	"time"
+
+	parser "kuberMendez/deployment-parser"
+	runtimecontract "kuberMendez/runtime"
 
 	"github.com/devjefster/GoShortUniqueID/idgen"
 	"github.com/docker/docker/errdefs"
@@ -28,36 +27,33 @@ const (
 	LabelContainerSpecHash = "ContainerSpecHash"
 )
 
-type ContainerSummary struct {
-	ID     string
-	Labels map[string]string
-	Name   string
-	Image  string
-	Status string
-	Ports  []container.PortSummary
-	Env    []parser.EnvVar
+type Runtime struct {
+	client *client.Client
 }
 
-func initDockerClient() (client.APIClient, error) {
+func NewRuntime() (*Runtime, error) {
 	apiClient, err := client.New(client.FromEnv)
+	if err != nil {
+		return nil, fmt.Errorf("create Docker client: %w", err)
+	}
 
-	return apiClient, err
+	return &Runtime{client: apiClient}, nil
 }
 
-func DockerRun(ctx context.Context, spec parser.Container, deploymentName string, replicas int) error {
+func (d *Runtime) Close() error {
+	if d == nil || d.client == nil {
+		return nil
+	}
+	return d.client.Close()
+}
+
+func (d *Runtime) ContainerRun(ctx context.Context, spec parser.Container, deploymentName string, replicas int) error {
 	ctx, close := context.WithTimeout(ctx, 60*time.Second)
 	defer close()
 
 	if replicas < 0 {
 		return fmt.Errorf("replicas cannot be negative: %d", replicas)
 	}
-
-	apiClient, err := initDockerClient()
-	if err != nil {
-		return fmt.Errorf("create docker client: %w", err)
-	}
-
-	defer apiClient.Close()
 
 	var image string = spec.Image
 	var envList []string
@@ -96,12 +92,12 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 
 	}
 
-	reader, err := apiClient.ImagePull(ctx, fmt.Sprintf("docker.io/library/%v", image), client.ImagePullOptions{})
+	reader, err := d.client.ImagePull(ctx, fmt.Sprintf("docker.io/library/%v", image), client.ImagePullOptions{})
 	if err != nil {
 		if client.IsErrConnectionFailed(err) {
 			return fmt.Errorf("docker daemon not running: %w", err)
 
-		} else if errdefs.IsNotFound(err) {
+		} else if errdefs.IsNotFound(err) { //TODO Change deprecated method
 			fmt.Println("Image not found", image)
 			return fmt.Errorf("pull image %q: %w", image, err)
 		}
@@ -113,7 +109,7 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 	}
 
 	for i := 1; i <= replicas; i++ {
-		resp, err := apiClient.ContainerCreate(ctx, client.ContainerCreateOptions{
+		resp, err := d.client.ContainerCreate(ctx, client.ContainerCreateOptions{
 			Image: image,
 			Name:  fmt.Sprintf("%v_%v", spec.Name, idGen.Generate()),
 			Config: &container.Config{
@@ -121,7 +117,7 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 					LabelCreator:           "Kubermendez",
 					LabelDeploymentName:    deploymentName,
 					LabelContainerName:     spec.Name,
-					LabelContainerSpecHash: ContainerSpecHash(spec),
+					LabelContainerSpecHash: runtimecontract.ContainerSpecHash(spec),
 				},
 				Env:          envList,
 				ExposedPorts: exposedPorts,
@@ -134,13 +130,13 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 			return fmt.Errorf("create container %q: %w", spec.Name, err)
 		}
 
-		if startResult, err := apiClient.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		if startResult, err := d.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 			return fmt.Errorf("start container %q: %w", spec.Name, err)
 		} else {
 			fmt.Println(startResult)
 		}
 
-		out, err := apiClient.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+		out, err := d.client.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 		if err != nil {
 			return fmt.Errorf("Container lgos %q:%w", resp.ID, err)
 		}
@@ -151,15 +147,9 @@ func DockerRun(ctx context.Context, spec parser.Container, deploymentName string
 	return nil
 }
 
-func ListContainers(ctx context.Context, deploymentName string) ([]ContainerSummary, error) {
+func (d *Runtime) ListContainers(ctx context.Context, deploymentName string) ([]runtimecontract.ContainerState, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-
-	apiClient, err := initDockerClient()
-	if err != nil {
-		return nil, fmt.Errorf("create Docker client: %w", err)
-	}
-	defer apiClient.Close()
 
 	filters := make(client.Filters)
 
@@ -172,7 +162,7 @@ func ListContainers(ctx context.Context, deploymentName string) ([]ContainerSumm
 		)
 	}
 
-	containers, err := apiClient.ContainerList(
+	containers, err := d.client.ContainerList(
 		ctx,
 		client.ContainerListOptions{
 			Filters: filters,
@@ -184,13 +174,13 @@ func ListContainers(ctx context.Context, deploymentName string) ([]ContainerSumm
 	}
 
 	if len(containers.Items) == 0 {
-		return []ContainerSummary{}, nil
+		return []runtimecontract.ContainerState{}, nil
 	}
 
-	result := make([]ContainerSummary, 0, len(containers.Items))
+	result := make([]runtimecontract.ContainerState, 0, len(containers.Items))
 
 	for _, container := range containers.Items {
-		config, err := apiClient.ContainerInspect(ctx, container.ID, client.ContainerInspectOptions{})
+		config, err := d.client.ContainerInspect(ctx, container.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %q: %w", container.ID, err)
 		}
@@ -200,58 +190,37 @@ func ListContainers(ctx context.Context, deploymentName string) ([]ContainerSumm
 			name = strings.TrimPrefix(container.Names[0], "/")
 		}
 
-		result = append(result, ContainerSummary{
-			ID:     container.ID,
-			Labels: container.Labels,
-			Name:   name,
-			Image:  container.Image,
-			Status: container.Status,
-			Ports:  container.Ports,
-			Env:    parseEnvVars(config.Container.Config.Env),
+		result = append(result, runtimecontract.ContainerState{
+			ID:       container.ID,
+			SpecName: container.Labels[LabelContainerName],
+			SpecHash: container.Labels[LabelContainerSpecHash],
+			Name:     name,
+			Image:    container.Image,
+			Status:   container.Status,
+			Ports:    parsePorts(container.Ports),
+			Env:      parseEnvVars(config.Container.Config.Env),
 		})
 	}
 
 	return result, nil
 }
 
-func ContainerSpecHash(spec parser.Container) string {
-	normalized := spec
-
-	normalized.Ports = append([]parser.Port(nil), spec.Ports...)
-	if normalized.Ports == nil {
-		normalized.Ports = []parser.Port{}
+func parsePorts(ports []container.PortSummary) []runtimecontract.PortState {
+	result := make([]runtimecontract.PortState, 0, len(ports))
+	for _, port := range ports {
+		result = append(result, runtimecontract.PortState{
+			ContainerPort: int(port.PrivatePort),
+			HostPort:      port.PublicPort != 0,
+		})
 	}
-	sort.Slice(normalized.Ports, func(i, j int) bool {
-		if normalized.Ports[i].ContainerPort == normalized.Ports[j].ContainerPort {
-			return !normalized.Ports[i].HostPort && normalized.Ports[j].HostPort
-		}
-		return normalized.Ports[i].ContainerPort < normalized.Ports[j].ContainerPort
-	})
-
-	normalized.Env = append([]parser.EnvVar(nil), spec.Env...)
-	if normalized.Env == nil {
-		normalized.Env = []parser.EnvVar{}
-	}
-	sort.Slice(normalized.Env, func(i, j int) bool {
-		if normalized.Env[i].Name == normalized.Env[j].Name {
-			return normalized.Env[i].Value < normalized.Env[j].Value
-		}
-		return normalized.Env[i].Name < normalized.Env[j].Name
-	})
-
-	data, err := json.Marshal(normalized)
-	if err != nil {
-		return ""
-	}
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf("%x", hash)
+	return result
 }
 
-func parseEnvVars(env []string) []parser.EnvVar {
-	result := make([]parser.EnvVar, 0, len(env))
+func parseEnvVars(env []string) []runtimecontract.EnvVar {
+	result := make([]runtimecontract.EnvVar, 0, len(env))
 	for _, item := range env {
 		name, value, _ := strings.Cut(item, "=")
-		result = append(result, parser.EnvVar{
+		result = append(result, runtimecontract.EnvVar{
 			Name:  name,
 			Value: value,
 		})
@@ -259,7 +228,7 @@ func parseEnvVars(env []string) []parser.EnvVar {
 	return result
 }
 
-func RemoveContainersByID(ctx context.Context, containerIDs []string) error {
+func (d *Runtime) RemoveContainersByID(ctx context.Context, containerIDs []string) error {
 	if len(containerIDs) == 0 {
 		return nil
 	}
@@ -267,18 +236,12 @@ func RemoveContainersByID(ctx context.Context, containerIDs []string) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	apiClient, err := initDockerClient()
-	if err != nil {
-		return fmt.Errorf("create docker client: %w", err)
-	}
-	defer apiClient.Close()
-
 	for _, containerID := range containerIDs {
-		_, err := apiClient.ContainerStop(ctx, containerID, client.ContainerStopOptions{})
+		_, err := d.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{})
 		if err != nil {
 			return fmt.Errorf("container stop %q: %w", containerID, err)
 		}
-		_, err = apiClient.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{})
+		_, err = d.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{})
 		if err != nil {
 			return fmt.Errorf("container remove %q: %w", containerID, err)
 		}
@@ -288,21 +251,14 @@ func RemoveContainersByID(ctx context.Context, containerIDs []string) error {
 	return nil
 }
 
-func RemoveContainers(ctx context.Context, deploymentName string) error {
+func (d *Runtime) RemoveContainers(ctx context.Context, deploymentName string) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-
-	apiClient, err := initDockerClient()
-	if err != nil {
-		return fmt.Errorf("create docker client: %w", err)
-	}
-
-	defer apiClient.Close()
 
 	filters := make(client.Filters)
 	filters.Add("label", fmt.Sprintf("%s=%v", LabelDeploymentName, deploymentName))
 
-	containers, err := apiClient.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
+	containers, err := d.client.ContainerList(ctx, client.ContainerListOptions{Filters: filters, All: true})
 	if err != nil {
 		return fmt.Errorf("Container list %w", err)
 	}
@@ -313,11 +269,11 @@ func RemoveContainers(ctx context.Context, deploymentName string) error {
 	} else {
 
 		for _, container := range containers.Items {
-			_, err := apiClient.ContainerStop(ctx, container.ID, client.ContainerStopOptions{})
+			_, err := d.client.ContainerStop(ctx, container.ID, client.ContainerStopOptions{})
 			if err != nil {
 				return fmt.Errorf("Container stop %q:%w", container.ID, err)
 			}
-			_, err = apiClient.ContainerRemove(ctx, container.ID, client.ContainerRemoveOptions{})
+			_, err = d.client.ContainerRemove(ctx, container.ID, client.ContainerRemoveOptions{})
 			if err != nil {
 				return fmt.Errorf("Container remove %q:%w", container.ID, err)
 			}

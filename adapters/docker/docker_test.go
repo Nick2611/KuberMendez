@@ -2,9 +2,11 @@ package docker
 
 import (
 	"context"
-	parser "kuberMendez/deployment-parser"
+	"os"
 	"testing"
 	"time"
+
+	parser "kuberMendez/deployment-parser"
 )
 
 type dockerRunInput struct {
@@ -14,6 +16,7 @@ type dockerRunInput struct {
 }
 
 func TestDockerContainerRun(t *testing.T) {
+	requireDockerIntegration(t)
 
 	tests := []struct {
 		name    string
@@ -66,9 +69,14 @@ func TestDockerContainerRun(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		runtime, err := NewRuntime()
+		if err != nil {
+			t.Fatalf("create Docker runtime: %v", err)
+		}
 		t.Run(test.name, func(t *testing.T) {
+
 			for _, container := range test.input.Spec {
-				err := DockerRun(context.TODO(), container, test.input.DeploymentName, test.input.Replicas)
+				err := runtime.ContainerRun(context.TODO(), container, test.input.DeploymentName, test.input.Replicas)
 
 				if test.wantErr && err == nil {
 					t.Fatal("Docker returned nil error, want error")
@@ -80,12 +88,19 @@ func TestDockerContainerRun(t *testing.T) {
 
 			}
 		})
-		time.Sleep(10 * time.Second)
-		RemoveContainers(context.TODO(), "test-deployment")
+		time.Sleep(5 * time.Second)
+		if err := runtime.RemoveContainers(context.TODO(), "test-deployment"); err != nil {
+			t.Errorf("remove test containers: %v", err)
+		}
+		if err := runtime.Close(); err != nil {
+			t.Errorf("close Docker runtime: %v", err)
+		}
 	}
 }
 
 func TestListContainers(t *testing.T) {
+	requireDockerIntegration(t)
+
 	tests := []struct {
 		name    string
 		input   string
@@ -99,8 +114,12 @@ func TestListContainers(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		runtime, err := NewRuntime()
+		if err != nil {
+			t.Fatalf("create Docker runtime: %v", err)
+		}
 		t.Run(test.name, func(t *testing.T) {
-			_, err := ListContainers(context.TODO(), test.input)
+			_, err := runtime.ListContainers(context.TODO(), test.input)
 
 			if test.wantErr && err == nil {
 				t.Fatal("ContainerList returned nil error, want error")
@@ -110,7 +129,19 @@ func TestListContainers(t *testing.T) {
 				t.Fatalf("ContainerList returned error, want nil: %v", err)
 			}
 
-			RemoveContainers(context.TODO(), "test-deployment")
+			if err := runtime.RemoveContainers(context.TODO(), "test-deployment"); err != nil {
+				t.Errorf("remove test containers: %v", err)
+			}
 		})
+		if err := runtime.Close(); err != nil {
+			t.Errorf("close Docker runtime: %v", err)
+		}
+	}
+}
+
+func requireDockerIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("KUBERMENDEZ_DOCKER_INTEGRATION") == "" {
+		t.Skip("set KUBERMENDEZ_DOCKER_INTEGRATION=1 to run Docker integration tests")
 	}
 }

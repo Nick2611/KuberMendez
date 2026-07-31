@@ -6,12 +6,19 @@ import (
 	"net/http"
 	"time"
 
+	runtimecontract "kuberMendez/runtime"
+
 	"github.com/gin-gonic/gin"
 )
 
-func Start(ctx context.Context, eventStream chan<- ApplyRequestDto) {
+type APIRuntime interface {
+	ListContainers(ctx context.Context, deploymentName string) ([]runtimecontract.ContainerState, error)
+	RemoveContainers(ctx context.Context, deploymentName string) error
+}
+
+func Start(ctx context.Context, eventStream chan<- ApplyRequestDto, runtime APIRuntime) {
 	port := ":8080"
-	r := setupRouter(eventStream)
+	r := setupRouter(eventStream, runtime)
 	srv := &http.Server{
 		Addr:    port,
 		Handler: r.Handler(),
@@ -31,7 +38,7 @@ func Start(ctx context.Context, eventStream chan<- ApplyRequestDto) {
 	fmt.Println("Server exiting")
 }
 
-func setupRouter(eventStream chan<- ApplyRequestDto) *gin.Engine {
+func setupRouter(eventStream chan<- ApplyRequestDto, runtime APIRuntime) *gin.Engine {
 	r := gin.Default()
 
 	r.GET("/health", func(ctx *gin.Context) {
@@ -40,10 +47,10 @@ func setupRouter(eventStream chan<- ApplyRequestDto) *gin.Engine {
 
 	r.POST("/events/reconcile", CallReconcile(eventStream))
 
-	r.GET("/status", GetDeploymentStatus())
+	r.GET("/status", GetDeploymentStatus(runtime))
 	//TODO get /status/all endpoint (debug endpoint?)
 
-	r.POST("events/delete", DeleteDeployment())
+	r.POST("/events/delete", DeleteDeployment(runtime))
 
 	r.GET("/logs", StreamLogs())
 

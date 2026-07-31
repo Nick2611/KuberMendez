@@ -3,20 +3,24 @@ package daemon
 import (
 	"context"
 	"fmt"
-	apiserver "kuberMendez/api-server"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	apiserver "kuberMendez/api-server"
 	"kuberMendez/deployment-parser"
-	"kuberMendez/docker"
+	runtimecontract "kuberMendez/runtime"
 	"kuberMendez/utils"
-
-	"github.com/moby/moby/api/types/container"
 )
 
-func InitReconcile(ctx context.Context, eventStream <-chan apiserver.ApplyRequestDto) {
+type ReconcileRuntime interface {
+	ListContainers(ctx context.Context, deploymentName string) ([]runtimecontract.ContainerState, error)
+	RemoveContainersByID(ctx context.Context, containerIDs []string) error
+	ContainerRun(ctx context.Context, spec parser.Container, deploymentName string, replicas int) error
+}
+
+func InitReconcile(ctx context.Context, eventStream <-chan apiserver.ApplyRequestDto, rr ReconcileRuntime) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -24,7 +28,7 @@ func InitReconcile(ctx context.Context, eventStream <-chan apiserver.ApplyReques
 		select {
 		case <-ticker.C:
 			fmt.Printf("[%s] Processing background task...\n", time.Now().Format("15:04:05"))
-			status, err := checkDesiredState(ctx)
+			status, err := checkDesiredState(ctx, rr)
 
 			switch {
 			case status == true:
@@ -45,7 +49,7 @@ func InitReconcile(ctx context.Context, eventStream <-chan apiserver.ApplyReques
 
 			fmt.Println("working with", msg.Message)
 
-			response := checkAppliedDeployment(ctx, msg)
+			response := checkAppliedDeployment(ctx, msg, rr)
 			msg.Reply <- response
 
 		case <-ctx.Done():
@@ -58,7 +62,7 @@ func InitReconcile(ctx context.Context, eventStream <-chan apiserver.ApplyReques
 //runs after the user applies a deployment file, this will trigger a channel notification that will
 //start a process of parsing the deployment file and running its containers spec
 
-func checkAppliedDeployment(ctx context.Context, req apiserver.ApplyRequestDto) apiserver.ReconcileResultDto {
+func checkAppliedDeployment(ctx context.Context, req apiserver.ApplyRequestDto, rr ReconcileRuntime) apiserver.ReconcileResultDto {
 	var fileName string = req.Message.DeploymentName
 	var response apiserver.ReconcileResultDto
 
@@ -84,7 +88,7 @@ func checkAppliedDeployment(ctx context.Context, req apiserver.ApplyRequestDto) 
 	var containers []parser.Container = parsed_yaml.Spec.Template.Spec.Containers
 
 	reconcileCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	changed, err := workCurrentDeployment(reconcileCtx, deploymentName, containers, parsed_yaml.Spec.Replicas)
+	changed, err := workCurrentDeployment(reconcileCtx, deploymentName, containers, parsed_yaml.Spec.Replicas, rr)
 	cancel()
 	if err != nil {
 		response.DeploymentName = deploymentName
@@ -102,7 +106,7 @@ func checkAppliedDeployment(ctx context.Context, req apiserver.ApplyRequestDto) 
 
 // Periodically runs after a set ammount of time, checks if a given deployment matches container desired state
 // Sequentially at first, might add concurrency later on
-func checkDesiredState(ctx context.Context) (bool, error) {
+func checkDesiredState(ctx context.Context, rr ReconcileRuntime) (bool, error) {
 
 	files, err := utils.GetFiles(utils.DefaultDeploymentsDirectory)
 	if err != nil {
@@ -122,6 +126,7 @@ func checkDesiredState(ctx context.Context) (bool, error) {
 			parsed_yaml.Metadata.Name,
 			parsed_yaml.Spec.Template.Spec.Containers,
 			parsed_yaml.Spec.Replicas,
+			rr,
 		)
 		cancel()
 		if err != nil {
@@ -138,7 +143,7 @@ func checkDesiredState(ctx context.Context) (bool, error) {
 }
 
 // Deletes and recreates containers that differ from the stored desired state.
-func workCurrentDeployment(ctx context.Context, deploymentName string, desired []parser.Container, replicas int) (bool, error) {
+func workCurrentDeployment(ctx context.Context, deploymentName string, desired []parser.Container, replicas int, rr ReconcileRuntime) (bool, error) {
 	if deploymentName == "" {
 		return false, fmt.Errorf("deployment name is required")
 	}
@@ -149,7 +154,7 @@ func workCurrentDeployment(ctx context.Context, deploymentName string, desired [
 		return false, fmt.Errorf("replicas cannot be negative: %d", replicas)
 	}
 
-	actual, err := docker.ListContainers(ctx, deploymentName)
+	actual, err := rr.ListContainers(ctx, deploymentName)
 	if err != nil {
 		return false, err
 	}
@@ -158,7 +163,7 @@ func workCurrentDeployment(ctx context.Context, deploymentName string, desired [
 		if len(actual) == 0 {
 			return false, nil
 		}
-		return true, docker.RemoveContainersByID(ctx, containerIDs(actual))
+		return true, rr.RemoveContainersByID(ctx, containerIDs(actual))
 	}
 
 	desiredByName := make(map[string]parser.Container, len(desired))
@@ -169,7 +174,7 @@ func workCurrentDeployment(ctx context.Context, deploymentName string, desired [
 		desiredByName[spec.Name] = spec
 	}
 
-	actualByName := make(map[string][]docker.ContainerSummary, len(desiredByName))
+	actualByName := make(map[string][]runtimecontract.ContainerState, len(desiredByName))
 	for _, actualContainer := range actual {
 		specName := actualContainerSpecName(actualContainer)
 		actualByName[specName] = append(actualByName[specName], actualContainer)
@@ -180,7 +185,7 @@ func workCurrentDeployment(ctx context.Context, deploymentName string, desired [
 		if _, ok := desiredByName[specName]; ok {
 			continue
 		}
-		if err := docker.RemoveContainersByID(ctx, containerIDs(runningContainers)); err != nil {
+		if err := rr.RemoveContainersByID(ctx, containerIDs(runningContainers)); err != nil {
 			return changed, err
 		}
 		delete(actualByName, specName)
@@ -195,25 +200,25 @@ func workCurrentDeployment(ctx context.Context, deploymentName string, desired [
 
 		switch {
 		case len(runningContainers) == 0:
-			if err := docker.DockerRun(ctx, spec, deploymentName, replicas); err != nil {
+			if err := rr.ContainerRun(ctx, spec, deploymentName, replicas); err != nil {
 				return changed, err
 			}
 			changed = true
 		case !allContainersMatchDesired(runningContainers, spec):
-			if err := docker.RemoveContainersByID(ctx, containerIDs(runningContainers)); err != nil {
+			if err := rr.RemoveContainersByID(ctx, containerIDs(runningContainers)); err != nil {
 				return changed, err
 			}
-			if err := docker.DockerRun(ctx, spec, deploymentName, replicas); err != nil {
+			if err := rr.ContainerRun(ctx, spec, deploymentName, replicas); err != nil {
 				return changed, err
 			}
 			changed = true
 		case len(runningContainers) < replicas:
-			if err := docker.DockerRun(ctx, spec, deploymentName, replicas-len(runningContainers)); err != nil {
+			if err := rr.ContainerRun(ctx, spec, deploymentName, replicas-len(runningContainers)); err != nil {
 				return changed, err
 			}
 			changed = true
 		case len(runningContainers) > replicas:
-			if err := docker.RemoveContainersByID(ctx, containerIDs(runningContainers[replicas:])); err != nil {
+			if err := rr.RemoveContainersByID(ctx, containerIDs(runningContainers[replicas:])); err != nil {
 				return changed, err
 			}
 			changed = true
@@ -223,11 +228,9 @@ func workCurrentDeployment(ctx context.Context, deploymentName string, desired [
 	return changed, nil
 }
 
-func actualContainerSpecName(actual docker.ContainerSummary) string {
-	if actual.Labels != nil {
-		if name := actual.Labels[docker.LabelContainerName]; name != "" {
-			return name
-		}
+func actualContainerSpecName(actual runtimecontract.ContainerState) string {
+	if actual.SpecName != "" {
+		return actual.SpecName
 	}
 
 	name := strings.TrimPrefix(actual.Name, "/")
@@ -237,7 +240,7 @@ func actualContainerSpecName(actual docker.ContainerSummary) string {
 	return name
 }
 
-func allContainersMatchDesired(actual []docker.ContainerSummary, desired parser.Container) bool {
+func allContainersMatchDesired(actual []runtimecontract.ContainerState, desired parser.Container) bool {
 	for _, actualContainer := range actual {
 		if !containerMatchesDesired(actualContainer, desired) {
 			return false
@@ -246,11 +249,9 @@ func allContainersMatchDesired(actual []docker.ContainerSummary, desired parser.
 	return true
 }
 
-func containerMatchesDesired(actual docker.ContainerSummary, desired parser.Container) bool {
-	if actual.Labels != nil {
-		if hash := actual.Labels[docker.LabelContainerSpecHash]; hash != "" {
-			return hash == docker.ContainerSpecHash(desired)
-		}
+func containerMatchesDesired(actual runtimecontract.ContainerState, desired parser.Container) bool {
+	if actual.SpecHash != "" {
+		return actual.SpecHash == runtimecontract.ContainerSpecHash(desired)
 	}
 
 	return actual.Image == desired.Image &&
@@ -258,7 +259,7 @@ func containerMatchesDesired(actual docker.ContainerSummary, desired parser.Cont
 		envVarsMatch(desired.Env, actual.Env)
 }
 
-func portsMatch(desired []parser.Port, actual []container.PortSummary) bool {
+func portsMatch(desired []parser.Port, actual []runtimecontract.PortState) bool {
 	if len(desired) != len(actual) {
 		return false
 	}
@@ -270,7 +271,7 @@ func portsMatch(desired []parser.Port, actual []container.PortSummary) bool {
 
 	actualPorts := make(map[int]bool, len(actual))
 	for _, port := range actual {
-		actualPorts[int(port.PrivatePort)] = port.PublicPort != 0
+		actualPorts[port.ContainerPort] = port.HostPort
 	}
 
 	if len(desiredPorts) != len(actualPorts) {
@@ -286,7 +287,7 @@ func portsMatch(desired []parser.Port, actual []container.PortSummary) bool {
 	return true
 }
 
-func envVarsMatch(desired []parser.EnvVar, actual []parser.EnvVar) bool {
+func envVarsMatch(desired []parser.EnvVar, actual []runtimecontract.EnvVar) bool {
 	if len(desired) != len(actual) {
 		return false
 	}
@@ -309,7 +310,7 @@ func envVarsMatch(desired []parser.EnvVar, actual []parser.EnvVar) bool {
 	return true
 }
 
-func containerIDs(containers []docker.ContainerSummary) []string {
+func containerIDs(containers []runtimecontract.ContainerState) []string {
 	ids := make([]string, 0, len(containers))
 	for _, container := range containers {
 		ids = append(ids, container.ID)

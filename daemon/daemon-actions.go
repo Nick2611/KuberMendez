@@ -14,6 +14,11 @@ import (
 
 const stateDirectory = ".kubermendez"
 
+type Runtime interface {
+	ReconcileRuntime
+	apiserver.APIRuntime
+}
+
 func StartBackground() (int, error) {
 	if err := os.MkdirAll(stateDirectory, 0755); err != nil {
 		return 0, fmt.Errorf("create daemon state directory: %w", err)
@@ -51,18 +56,18 @@ func StartBackground() (int, error) {
 	return pid, nil
 }
 
-func InitDaemon(ctx context.Context) {
+func InitDaemon(ctx context.Context, runtime Runtime) {
 	eventStream := make(chan apiserver.ApplyRequestDto, 1)
 	var wg sync.WaitGroup
 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		apiserver.Start(ctx, eventStream)
+		apiserver.Start(ctx, eventStream, runtime)
 	}()
 	go func() {
 		defer wg.Done()
-		InitReconcile(ctx, eventStream)
+		InitReconcile(ctx, eventStream, runtime)
 	}()
 
 	<-ctx.Done()
@@ -77,4 +82,3 @@ func deleteSessionFiles() {
 	os.Remove(filepath.Join(stateDirectory, "daemon.pid"))
 	os.Remove(filepath.Join(stateDirectory, "daemon.log"))
 }
-

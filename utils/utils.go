@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	parser "kuberMendez/deployment-parser"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	parser "kuberMendez/deployment-parser"
 )
 
 const (

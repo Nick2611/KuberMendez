@@ -4,11 +4,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"kuberMendez/docker"
+	runtimecontract "kuberMendez/runtime"
 	"kuberMendez/utils"
 
 	"github.com/gin-gonic/gin"
-	"github.com/moby/moby/api/types/container"
 )
 
 const (
@@ -77,7 +76,7 @@ func CallReconcile(eventStream chan<- ApplyRequestDto) gin.HandlerFunc {
 	}
 }
 
-func GetDeploymentStatus() gin.HandlerFunc {
+func GetDeploymentStatus(runtime APIRuntime) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 
 		var req GetDeploymentStatusRequestDto
@@ -92,7 +91,7 @@ func GetDeploymentStatus() gin.HandlerFunc {
 
 		requestContext := ctx.Request.Context()
 
-		containers, err := docker.ListContainers(requestContext, req.DeploymentName)
+		containers, err := runtime.ListContainers(requestContext, req.DeploymentName)
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{
 				"error": err.Error(),
@@ -100,11 +99,11 @@ func GetDeploymentStatus() gin.HandlerFunc {
 			return
 		}
 
-		if len(containers) == 0{
+		if len(containers) == 0 {
 			ctx.JSON(
 				http.StatusOK,
 				gin.H{
-					"Status":"No running containers",
+					"status": "No running containers",
 				},
 			)
 
@@ -114,15 +113,15 @@ func GetDeploymentStatus() gin.HandlerFunc {
 		//provisional until I figure out what's the best way to return current state
 		//TODO
 		var currentStateFileStruct GetDeploymentStatusResponseDto
-		var ports []container.PortSummary
+		var ports []runtimecontract.PortState
 
-		for _, c := range containers{
+		for _, c := range containers {
 			ports = append(ports, c.Ports...)
 		}
 
 		currentStateFileStruct.DeploymentName = req.DeploymentName
 		currentStateFileStruct.Image = containers[0].Image
-		currentStateFileStruct.Port = ports
+		currentStateFileStruct.Ports = ports
 		currentStateFileStruct.Replicas = len(containers)
 
 		ctx.JSON(
@@ -132,7 +131,7 @@ func GetDeploymentStatus() gin.HandlerFunc {
 	}
 }
 
-func DeleteDeployment() gin.HandlerFunc {
+func DeleteDeployment(runtime APIRuntime) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var req DeleteDeploymentRequestDto
 
@@ -151,26 +150,26 @@ func DeleteDeployment() gin.HandlerFunc {
 				ctx.JSON(http.StatusNotFound, DeleteDeploymentResponseDto{
 					DeploymentName: req.DeploymentName,
 					Status:         status,
-					Error:          err,
+					Error:          err.Error(),
 				})
 			case "Unexpected error":
-				ctx.JSON(http.StatusNotFound, DeleteDeploymentResponseDto{
+				ctx.JSON(http.StatusInternalServerError, DeleteDeploymentResponseDto{
 					DeploymentName: req.DeploymentName,
 					Status:         status,
-					Error:          err,
+					Error:          err.Error(),
 				})
 			}
-
+			return
 		}
 
 		requestContext := ctx.Request.Context()
 
-		err = docker.RemoveContainers(requestContext, req.DeploymentName)
+		err = runtime.RemoveContainers(requestContext, req.DeploymentName)
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, DeleteDeploymentResponseDto{
 				DeploymentName: req.DeploymentName,
 				Status:         "Error while removing container",
-				Error:          err,
+				Error:          err.Error(),
 			})
 
 			return
